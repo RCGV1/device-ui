@@ -88,6 +88,12 @@ class TFTView_320x240 : public MeshtasticView
 
 #ifdef UNIT_TEST
     lv_obj_t *nodeListRootForTesting(void) const;
+    void resetNodeListForTesting(void);
+    void updateNodesFilteredForTesting(bool reset);
+    void setCurrentTimeForTesting(time_t value);
+    size_t nodeCountForTesting(void) const;
+    const char *nodeLongNameForTesting(uint32_t nodeNum) const;
+    uint8_t nodeRoleForTesting(uint32_t nodeNum) const;
 #endif
 
     enum BasicSettings {

@@ -156,6 +156,90 @@ lv_obj_t *TFTView_320x240::nodeListRootForTesting(void) const
 {
     return objects.nodes_panel;
 }
+
+void TFTView_320x240::resetNodeListForTesting(void)
+{
+    while (!nodeObjects.empty()) {
+        removeFromMap(nodeObjects.begin()->first);
+    }
+
+    for (auto &entry : nodes) {
+        if (entry.second) {
+            lv_obj_delete(entry.second);
+        }
+    }
+    nodes.clear();
+
+    for (auto &entry : messages) {
+        if (entry.second) {
+            lv_obj_delete(entry.second);
+        }
+    }
+    messages.clear();
+
+    for (auto &entry : chats) {
+        if (entry.second) {
+            lv_obj_delete(entry.second);
+        }
+    }
+    chats.clear();
+
+    nodeCount = 0;
+    nodesOnline = 0;
+    nodesFiltered = 0;
+    nodesChanged = true;
+    processingFilter = false;
+    updateNodesStatus();
+}
+
+void TFTView_320x240::updateNodesFilteredForTesting(bool reset)
+{
+    updateNodesFiltered(reset);
+}
+
+void TFTView_320x240::setCurrentTimeForTesting(time_t value)
+{
+    curtime = value;
+}
+
+size_t TFTView_320x240::nodeCountForTesting(void) const
+{
+    return nodes.size();
+}
+
+const char *TFTView_320x240::nodeLongNameForTesting(uint32_t nodeNum) const
+{
+    const auto it = nodes.find(nodeNum);
+    if (it == nodes.end() || !it->second) {
+        return nullptr;
+    }
+    return lv_label_get_text(it->second->LV_OBJ_IDX(node_lbl_idx));
+}
+
+uint8_t TFTView_320x240::nodeRoleForTesting(uint32_t nodeNum) const
+{
+    const auto it = nodes.find(nodeNum);
+    if (it == nodes.end() || !it->second) {
+        return static_cast<uint8_t>(eRole::unknown);
+    }
+    const void *source = lv_image_get_src(it->second->LV_OBJ_IDX(node_img_idx));
+    if (source == &img_unmessagable_image) {
+        return static_cast<uint8_t>(eRole::unmessagable);
+    }
+    if (source == &img_top_nodes_image) {
+        return static_cast<uint8_t>(eRole::router_client);
+    }
+    if (source == &img_node_router_image) {
+        return static_cast<uint8_t>(eRole::router);
+    }
+    if (source == &img_node_sensor_image) {
+        return static_cast<uint8_t>(eRole::sensor);
+    }
+    if (source == &img_circle_question_image) {
+        return static_cast<uint8_t>(eRole::unknown);
+    }
+    return static_cast<uint8_t>(eRole::client);
+}
 #endif
 
 /**

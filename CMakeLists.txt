@@ -17,9 +17,19 @@ option(ENABLE_DOCTESTS "Include tests in the library. Setting this to OFF will r
                         Tests in tests/*.cpp will still be enabled." ${MAIN_PROJECT})
 option(ENABLE_DEBUG_LOG "Enable debug log" OFF)
 option(ENABLE_MUI_HEADLESS_TESTS "Use deterministic headless display and input support for MUI integration tests" OFF)
+option(MUI_NODE_LIST_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer for native node-list tests" OFF)
 
 if(ENABLE_MUI_HEADLESS_TESTS AND NOT ENABLE_DOCTESTS)
     message(FATAL_ERROR "ENABLE_MUI_HEADLESS_TESTS requires ENABLE_DOCTESTS")
+endif()
+
+if(MUI_NODE_LIST_SANITIZERS)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    else()
+        message(FATAL_ERROR "MUI_NODE_LIST_SANITIZERS requires Clang or GCC")
+    endif()
 endif()
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
@@ -79,6 +89,7 @@ if(ENABLE_MUI_HEADLESS_TESTS)
     )
     list(FILTER PORTDUINO_SOURCES EXCLUDE REGEX "cores/portduino/main\\.cpp$")
     list(FILTER PORTDUINO_SOURCES EXCLUDE REGEX "cores/portduino/linux/LinuxHardwareI2C\\.cpp$")
+    list(FILTER PORTDUINO_SOURCES EXCLUDE REGEX "cores/portduino/simulated/SimHardwareI2C\\.cpp$")
     add_library(Portduino STATIC ${PORTDUINO_SOURCES})
 else()
     include(Portduino)
@@ -119,6 +130,80 @@ endif()
 
 add_library(DeviceUI ${sources})
 target_link_libraries(DeviceUI PRIVATE lvgl::lvgl LovyanGFX Portduino Protobufs CURL::libcurl)
+
+if(ENABLE_MUI_HEADLESS_TESTS)
+    execute_process(
+        COMMAND git rev-parse --verify HEAD
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE DEVICE_UI_GIT_REVISION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NOT DEVICE_UI_GIT_REVISION)
+        set(DEVICE_UI_GIT_REVISION unknown)
+    endif()
+    execute_process(
+        COMMAND git diff --quiet --ignore-submodules --
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        RESULT_VARIABLE DEVICE_UI_GIT_DIRTY
+        ERROR_QUIET
+    )
+
+    set(NODE_LIST_BENCHMARK_INCLUDES
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/locale
+        ${CMAKE_CURRENT_SOURCE_DIR}/portduino
+        ${CMAKE_CURRENT_SOURCE_DIR}/generated/${GENERATED_VIEW}
+        ${GENERATED_FILES_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR}
+        ${nanopb_SOURCE_DIR}
+    )
+    set(NODE_LIST_BENCHMARK_LIBRARIES
+        DeviceUI
+        lvgl::lvgl
+        LovyanGFX
+        Portduino
+        Protobufs
+        PNGdec
+        protobuf-nanopb-static
+        doctest::doctest
+    )
+
+    add_library(NodeListBenchmark STATIC tools/node_list_bench.cpp)
+    target_include_directories(NodeListBenchmark PRIVATE ${NODE_LIST_BENCHMARK_INCLUDES})
+    target_link_libraries(NodeListBenchmark PRIVATE ${NODE_LIST_BENCHMARK_LIBRARIES})
+    target_compile_definitions(NodeListBenchmark PRIVATE
+        DEVICE_UI_SOURCE_REVISION="${DEVICE_UI_GIT_REVISION}"
+        DEVICE_UI_SOURCE_DIRTY=${DEVICE_UI_GIT_DIRTY}
+    )
+
+    add_executable(node_list_bench
+        tools/node_list_bench.cpp
+        tests/HeadlessDisplayDriver.cpp
+        tests/HeadlessDisplayDriverFactory.cpp
+        tests/HeadlessLinuxHardwareI2C.cpp
+        tests/HeadlessPlatform.cpp
+        tests/MuiTestHarness.cpp
+    )
+    target_include_directories(node_list_bench PRIVATE ${NODE_LIST_BENCHMARK_INCLUDES})
+    target_link_libraries(node_list_bench PRIVATE ${NODE_LIST_BENCHMARK_LIBRARIES})
+    target_compile_definitions(node_list_bench PRIVATE
+        NODE_LIST_BENCH_EXECUTABLE
+        UNIT_TEST
+        DEVICE_UI_SOURCE_REVISION="${DEVICE_UI_GIT_REVISION}"
+        DEVICE_UI_SOURCE_DIRTY=${DEVICE_UI_GIT_DIRTY}
+    )
+    if(APPLE)
+        foreach(PORTDUINO_INCLUDE_DIR IN LISTS PORTDUINO_INCLUDE_DIRS)
+            target_compile_options(NodeListBenchmark PRIVATE "-idirafter${PORTDUINO_INCLUDE_DIR}")
+            target_compile_options(node_list_bench PRIVATE "-idirafter${PORTDUINO_INCLUDE_DIR}")
+        endforeach()
+    endif()
+    set_target_properties(node_list_bench PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+endif()
 
 # Handle Windows Static linking dependencies if applicable
 if(WIN32)
@@ -161,7 +246,7 @@ if(ENABLE_DOCTESTS)
     add_executable(tests ${sources_test})
     target_link_libraries(tests PRIVATE DeviceUI doctest::doctest lvgl::lvgl LovyanGFX Portduino Protobufs)
     if(ENABLE_MUI_HEADLESS_TESTS)
-        target_link_libraries(tests PRIVATE PNGdec protobuf-nanopb-static)
+        target_link_libraries(tests PRIVATE PNGdec protobuf-nanopb-static NodeListBenchmark)
         target_compile_definitions(tests PRIVATE UNIT_TEST)
         if(APPLE)
             foreach(PORTDUINO_INCLUDE_DIR IN LISTS PORTDUINO_INCLUDE_DIRS)
@@ -175,6 +260,7 @@ if(ENABLE_DOCTESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/locale
         ${CMAKE_CURRENT_SOURCE_DIR}/portduino
         ${CMAKE_CURRENT_SOURCE_DIR}/generated/${GENERATED_VIEW}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools
     )
     if(ENABLE_MUI_HEADLESS_TESTS)
         target_include_directories(tests PRIVATE ${GENERATED_FILES_DIR} ${CMAKE_CURRENT_BINARY_DIR} ${nanopb_SOURCE_DIR})
@@ -183,5 +269,6 @@ if(ENABLE_DOCTESTS)
     add_test(NAME tests COMMAND tests)
     if(ENABLE_MUI_HEADLESS_TESTS)
         add_test(NAME MuiNodeListIntegration COMMAND tests "--test-case=*deterministic headless display*")
+        add_test(NAME NodeListBenchmark COMMAND tests "--test-case=*baseline benchmark emits list diagnostics*")
     endif()
 endif()
