@@ -40,6 +40,8 @@ struct NodeRecord {
     bool hasActiveChat = false;
 };
 
+static_assert(sizeof(NodeRecord) < 1024, "NodeRecord must remain bounded");
+
 enum class NodeMutationKind { Inserted, Updated, Removed, Unchanged };
 
 enum NodeChangedField : uint32_t {

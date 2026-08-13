@@ -100,8 +100,8 @@ class TFTView_320x240 : public MeshtasticView
     const char *nodeLongNameForTesting(uint32_t nodeNum) const;
     uint8_t nodeRoleForTesting(uint32_t nodeNum) const;
     const NodeRecord *nodeRecordForTesting(uint32_t nodeNum) const { return nodeRecord(nodeNum); }
-    const NodeStore &nodeStoreForTesting(void) const { return nodeStore; }
-    const VisibleNodeIndex &visibleNodesForTesting(void) const { return visibleNodes; }
+    const NodeStore &nodeStoreForTesting() const { return nodeStore; }
+    const VisibleNodeIndex &visibleNodesForTesting() const { return visibleNodes; }
 #endif
 
     enum BasicSettings {

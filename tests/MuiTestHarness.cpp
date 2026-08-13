@@ -168,6 +168,11 @@ const VisibleNodeIndex &MuiTestHarness::visibleIndex() const
     return view->visibleNodesForTesting();
 }
 
+lv_obj_t *MuiTestHarness::nodeListRootForTesting() const
+{
+    return view->nodeListRootForTesting();
+}
+
 size_t MuiTestHarness::countObjects(const lv_obj_t *root)
 {
     if (!root) {

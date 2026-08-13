@@ -366,17 +366,21 @@ NodeListBenchmarkReport runNodeListBenchmark(const NodeListBenchmarkOptions &opt
         harness.updateNodeFixture(changed.id, "DUP2", "Duplicate Final", static_cast<uint8_t>(MeshtasticView::router), true,
                                   false, changed.channel);
 
-        const auto &offscreen = fixtures.back();
-        harness.updateNodeFixture(offscreen.id, "OFFS", "Offscreen Updated", offscreen.role, offscreen.hasKey,
-                                  offscreen.unmessagable, offscreen.channel);
-        harness.pump();
+        if (fixtures.size() > 1) {
+            const auto &offscreen = fixtures.back();
+            harness.updateNodeFixture(offscreen.id, "OFFS", "Offscreen Updated", offscreen.role, offscreen.hasKey,
+                                      offscreen.unmessagable, offscreen.channel);
+            harness.pump();
+            const char *offscreenName = harness.nodeLongName(offscreen.id);
+            offscreenUpdateOk = offscreenUpdateOk && offscreenName && std::strcmp(offscreenName, "Offscreen Updated") == 0;
+        } else {
+            harness.pump();
+        }
 
         const char *changedName = harness.nodeLongName(changed.id);
         duplicateUpdateOk = duplicateUpdateOk && changedName && std::strcmp(changedName, "Duplicate Final") == 0;
         changedNameAndRoleOk = changedNameAndRoleOk && changedName && std::strcmp(changedName, "Duplicate Final") == 0 &&
                                harness.nodeRole(changed.id) == static_cast<uint8_t>(MeshtasticView::router);
-        const char *offscreenName = harness.nodeLongName(offscreen.id);
-        offscreenUpdateOk = offscreenUpdateOk && offscreenName && std::strcmp(offscreenName, "Offscreen Updated") == 0;
 
         const uint64_t filterNs = measureNs([&] { harness.scanNodeFilters(); });
         harness.toggleResyncPresentationFixture();

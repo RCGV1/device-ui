@@ -39,6 +39,7 @@ class MuiTestHarness
     const NodeRecord *node(uint32_t nodeId) const;
     const NodeStore &store() const;
     const VisibleNodeIndex &visibleIndex() const;
+    lv_obj_t *nodeListRootForTesting() const;
 
   private:
     static size_t countObjects(const lv_obj_t *root);
