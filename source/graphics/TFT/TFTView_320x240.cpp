@@ -183,12 +183,15 @@ void TFTView_320x240::resetNodeListForTesting(void)
         }
     }
     chats.clear();
+    updateActiveChats();
 
     nodeCount = 0;
     nodesOnline = 0;
     nodesFiltered = 0;
     nodesChanged = true;
     processingFilter = false;
+    nodeStore = NodeStore();
+    visibleNodes = VisibleNodeIndex();
     updateNodesStatus();
 }
 
@@ -4743,6 +4746,21 @@ void TFTView_320x240::addNode(uint32_t nodeNum, uint8_t ch, const char *userShor
         purgeNode(nodeNum);
     }
 
+    if (!nodeStore.find(nodeNum)) {
+        meshtastic_User userRecord = meshtastic_User_init_default;
+        if (userShort)
+            std::strncpy(userRecord.short_name, userShort, sizeof(userRecord.short_name) - 1);
+        if (userLong)
+            std::strncpy(userRecord.long_name, userLong, sizeof(userRecord.long_name) - 1);
+        userRecord.role = static_cast<meshtastic_Config_DeviceConfig_Role>(role);
+        if (hasKey) {
+            userRecord.public_key.size = 32;
+        }
+        userRecord.has_is_unmessagable = true;
+        userRecord.is_unmessagable = unmessagable;
+        nodeStore.upsertUser(nodeNum, ch, lastHeard, userRecord, false);
+    }
+
     lv_obj_t *p = lv_obj_create(objects.nodes_panel);
     lv_ll_t *lv_group_ll = &lv_group_get_default()->obj_ll;
 
@@ -4950,6 +4968,7 @@ void TFTView_320x240::setDeviceMetaData(int hw_model, const char *version, bool 
 
 void TFTView_320x240::addOrUpdateNode(uint32_t nodeNum, uint8_t channel, uint32_t lastHeard, const meshtastic_User &cfg)
 {
+    nodeStore.upsertUser(nodeNum, channel, lastHeard, cfg, false);
     if (nodes.find(nodeNum) == nodes.end()) {
         addNode(nodeNum, channel, cfg.short_name, cfg.long_name, lastHeard, (MeshtasticView::eRole)cfg.role,
                 cfg.public_key.size != 0, cfg.has_is_unmessagable && cfg.is_unmessagable);
@@ -4973,6 +4992,9 @@ void TFTView_320x240::addOrUpdateNode(uint32_t nodeNum, uint8_t channel, uint32_
 //                                  eRole role, bool hasKey, bool viaMqtt)
 void TFTView_320x240::updateNode(uint32_t nodeNum, uint8_t ch, const meshtastic_User &cfg)
 {
+    const auto *existing = nodeStore.find(nodeNum);
+    uint32_t lh = existing ? existing->lastHeard : curtime;
+    nodeStore.upsertUser(nodeNum, ch, lh, cfg, false);
     db.user = cfg;
     auto it = nodes.find(nodeNum);
     if (it != nodes.end() && it->second) {
@@ -5035,6 +5057,7 @@ void TFTView_320x240::updateNode(uint32_t nodeNum, uint8_t ch, const meshtastic_
 
 void TFTView_320x240::updatePosition(uint32_t nodeNum, int32_t lat, int32_t lon, int32_t alt, uint32_t sats, uint32_t precision)
 {
+    nodeStore.updatePosition(nodeNum, {true, lat, lon, alt, sats, precision});
     int32_t altU = abs(alt) < 10000 ? alt : 0;
     char units[3] = {};
     if (db.config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_METRIC) {
@@ -5161,6 +5184,13 @@ void TFTView_320x240::updateDistance(uint32_t nodeNum, int32_t lat, int32_t lon)
  */
 void TFTView_320x240::updateMetrics(uint32_t nodeNum, uint32_t bat_level, float voltage, float chUtil, float airUtil)
 {
+    meshtastic_DeviceMetrics devMetrics = meshtastic_DeviceMetrics_init_default;
+    devMetrics.battery_level = bat_level;
+    devMetrics.voltage = voltage;
+    devMetrics.channel_utilization = chUtil;
+    devMetrics.air_util_tx = airUtil;
+    nodeStore.updateDeviceMetrics(nodeNum, devMetrics);
+
     auto it = nodes.find(nodeNum);
     if (it != nodes.end()) {
         char buf[48];
@@ -5228,6 +5258,7 @@ void TFTView_320x240::updateMetrics(uint32_t nodeNum, uint32_t bat_level, float 
 
 void TFTView_320x240::updateEnvironmentMetrics(uint32_t nodeNum, const meshtastic_EnvironmentMetrics &metrics)
 {
+    nodeStore.updateEnvironmentMetrics(nodeNum, metrics);
     auto it = nodes.find(nodeNum);
     if (it != nodes.end()) {
         char buf[50];
@@ -5261,6 +5292,7 @@ void TFTView_320x240::updateEnvironmentMetrics(uint32_t nodeNum, const meshtasti
 
 void TFTView_320x240::updateAirQualityMetrics(uint32_t nodeNum, const meshtastic_AirQualityMetrics &metrics)
 {
+    nodeStore.updateAirQualityMetrics(nodeNum, metrics);
     auto it = nodes.find(nodeNum);
     if (it != nodes.end() && it->first != ownNode) {
         // TODO
@@ -5286,6 +5318,7 @@ void TFTView_320x240::updatePowerMetrics(uint32_t nodeNum, const meshtastic_Powe
  */
 void TFTView_320x240::updateSignalStrength(uint32_t nodeNum, int32_t rssi, float snr)
 {
+    nodeStore.updateSignal(nodeNum, rssi, snr);
     if (nodeNum != ownNode) {
         auto it = nodes.find(nodeNum);
         if (it != nodes.end()) {
@@ -5304,6 +5337,7 @@ void TFTView_320x240::updateSignalStrength(uint32_t nodeNum, int32_t rssi, float
 
 void TFTView_320x240::updateHopsAway(uint32_t nodeNum, uint8_t hopsAway)
 {
+    nodeStore.updateHops(nodeNum, hopsAway);
     if (nodeNum != ownNode) {
         auto it = nodes.find(nodeNum);
         if (it != nodes.end()) {
@@ -5707,6 +5741,7 @@ void TFTView_320x240::purgeNode(uint32_t nodeNum)
     }
     removeFromMap(oldest);
     nodes.erase(oldest);
+    nodeStore.remove(oldest);
     nodeCount--;
     nodesChanged = true; // flag to force re-apply node filter
 }
@@ -7196,6 +7231,7 @@ void TFTView_320x240::setInputButtonLabel(void)
 
 void TFTView_320x240::removeNode(uint32_t nodeNum)
 {
+    nodeStore.remove(nodeNum);
     auto it = nodes.find(nodeNum);
     if (it != nodes.end()) {
     }

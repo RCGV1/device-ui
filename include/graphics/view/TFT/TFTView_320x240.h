@@ -1,6 +1,6 @@
-#pragma once
-
 #include "graphics/common/MeshtasticView.h"
+#include "graphics/common/NodeStore.h"
+#include "graphics/common/VisibleNodeIndex.h"
 #include "meshtastic/clientonly.pb.h"
 #include <set>
 
@@ -53,6 +53,7 @@ class TFTView_320x240 : public MeshtasticView
     void updateSerialModule(const meshtastic_ModuleConfig_SerialConfig &cfg) override {}
     void updateExtNotificationModule(const meshtastic_ModuleConfig_ExternalNotificationConfig &cfg) override;
     void updateStoreForwardModule(const meshtastic_ModuleConfig_StoreForwardConfig &cfg) override {}
+    void rangeTestModule(const meshtastic_ModuleConfig_RangeTestConfig &cfg) {}
     void updateRangeTestModule(const meshtastic_ModuleConfig_RangeTestConfig &cfg) override {}
     void updateTelemetryModule(const meshtastic_ModuleConfig_TelemetryConfig &cfg) override {}
     void updateCannedMessageModule(const meshtastic_ModuleConfig_CannedMessageConfig &) override {}
@@ -86,6 +87,10 @@ class TFTView_320x240 : public MeshtasticView
     void restoreMessage(const LogMessage &msg) override;
     void removeNode(uint32_t nodeNum) override;
 
+    const NodeRecord *nodeRecord(NodeId id) const { return nodeStore.find(id); }
+    const NodeStore &getNodeStore(void) const { return nodeStore; }
+    const VisibleNodeIndex &getVisibleNodes(void) const { return visibleNodes; }
+
 #ifdef UNIT_TEST
     lv_obj_t *nodeListRootForTesting(void) const;
     void resetNodeListForTesting(void);
@@ -94,6 +99,9 @@ class TFTView_320x240 : public MeshtasticView
     size_t nodeCountForTesting(void) const;
     const char *nodeLongNameForTesting(uint32_t nodeNum) const;
     uint8_t nodeRoleForTesting(uint32_t nodeNum) const;
+    const NodeRecord *nodeRecordForTesting(uint32_t nodeNum) const { return nodeRecord(nodeNum); }
+    const NodeStore &nodeStoreForTesting(void) const { return nodeStore; }
+    const VisibleNodeIndex &visibleNodesForTesting(void) const { return visibleNodes; }
 #endif
 
     enum BasicSettings {
@@ -466,4 +474,6 @@ class TFTView_320x240 : public MeshtasticView
     };
 
     meshtastic_DeviceProfile_full db{}; // full copy of the node's configuration db (except nodeinfos) plus ui data
+    NodeStore nodeStore;
+    VisibleNodeIndex visibleNodes;
 };

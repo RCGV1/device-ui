@@ -42,7 +42,7 @@ bool MuiTestHarness::ready()
 void MuiTestHarness::resetNodeList()
 {
     view->resetNodeListForTesting();
-    pump();
+    pump(500);
 }
 
 void MuiTestHarness::setCurrentTime(uint32_t value)
@@ -151,6 +151,21 @@ const char *MuiTestHarness::nodeLongName(uint32_t nodeId) const
 uint8_t MuiTestHarness::nodeRole(uint32_t nodeId) const
 {
     return view->nodeRoleForTesting(nodeId);
+}
+
+const NodeRecord *MuiTestHarness::node(uint32_t nodeId) const
+{
+    return view->nodeRecordForTesting(nodeId);
+}
+
+const NodeStore &MuiTestHarness::store() const
+{
+    return view->nodeStoreForTesting();
+}
+
+const VisibleNodeIndex &MuiTestHarness::visibleIndex() const
+{
+    return view->visibleNodesForTesting();
 }
 
 size_t MuiTestHarness::countObjects(const lv_obj_t *root)

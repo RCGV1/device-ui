@@ -1,6 +1,8 @@
 #pragma once
 
 #include "HeadlessDisplayDriver.h"
+#include "graphics/common/NodeStore.h"
+#include "graphics/common/VisibleNodeIndex.h"
 #include <cstddef>
 #include <cstdint>
 
@@ -34,6 +36,9 @@ class MuiTestHarness
     size_t renderedNodeCount() const;
     const char *nodeLongName(uint32_t nodeId) const;
     uint8_t nodeRole(uint32_t nodeId) const;
+    const NodeRecord *node(uint32_t nodeId) const;
+    const NodeStore &store() const;
+    const VisibleNodeIndex &visibleIndex() const;
 
   private:
     static size_t countObjects(const lv_obj_t *root);
