@@ -4,8 +4,13 @@ add_compile_definitions(LV_LVGL_H_INCLUDE_SIMPLE)
 add_compile_definitions(LV_CONF_INCLUDE_SIMPLE)
 add_compile_definitions(LV_COMP_CONF_INCLUDE_SIMPLE)
 add_compile_definitions(LV_BUILD_TEST=0)
-add_compile_definitions(LV_USE_LIBINPUT=1)
-add_compile_definitions(LV_LIBINPUT_XKB=1)
+if(ENABLE_MUI_HEADLESS_TESTS)
+    add_compile_definitions(LV_USE_LIBINPUT=0)
+    add_compile_definitions(LV_LIBINPUT_XKB=0)
+else()
+    add_compile_definitions(LV_USE_LIBINPUT=1)
+    add_compile_definitions(LV_LIBINPUT_XKB=1)
+endif()
 FetchContent_Declare(lvgl 
                      GIT_REPOSITORY https://github.com/lvgl/lvgl.git
                      GIT_TAG  v9.3.0

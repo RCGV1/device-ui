@@ -78,3 +78,13 @@ DeviceGUI *ViewFactory::create(const DisplayDriverConfig &cfg)
     assert(false);
     return nullptr;
 }
+
+#ifdef UNIT_TEST
+DeviceGUI *ViewFactory::createForTesting(const DisplayDriverConfig &cfg, DisplayDriver *driver)
+{
+    if (!TFTView_320x240::gui) {
+        TFTView_320x240::gui = new TFTView_320x240(&cfg, driver);
+    }
+    return TFTView_320x240::gui;
+}
+#endif

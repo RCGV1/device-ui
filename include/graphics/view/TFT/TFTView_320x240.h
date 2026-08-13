@@ -86,6 +86,10 @@ class TFTView_320x240 : public MeshtasticView
     void restoreMessage(const LogMessage &msg) override;
     void removeNode(uint32_t nodeNum) override;
 
+#ifdef UNIT_TEST
+    lv_obj_t *nodeListRootForTesting(void) const;
+#endif
+
     enum BasicSettings {
         eNone,
         eSetup,
