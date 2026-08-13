@@ -36,6 +36,9 @@ void VirtualNodeList::createRowPool()
         return;
     }
 
+    // Disable flex layout on parent so rows use absolute virtual coordinates
+    lv_obj_set_style_layout(parentPanel, LV_LAYOUT_NONE, LV_PART_MAIN | LV_STATE_DEFAULT);
+
     // Create spacer for virtual scroll height
     spacer = lv_obj_create(parentPanel);
     lv_obj_set_size(spacer, 1, 1);
@@ -138,7 +141,8 @@ void VirtualNodeList::updateVirtualContentHeight()
     prefixHeights[ids.size()] = currentY;
 
     if (spacer) {
-        lv_obj_set_pos(spacer, 0, currentY > 0 ? currentY - 1 : 0);
+        lv_obj_set_size(spacer, 1, currentY > 0 ? currentY : 1);
+        lv_obj_set_pos(spacer, 0, 0);
     }
 }
 
