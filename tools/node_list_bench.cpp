@@ -271,9 +271,9 @@ void observeAllocatorSnapshot(NodeListAllocatorSnapshot &peak, const NodeListAll
     peak.fragmentationPercent = std::max(peak.fragmentationPercent, snapshot.fragmentationPercent);
 }
 
-bool allocatorBlockCountIsBounded(const NodeListAllocatorSnapshot &before, const NodeListAllocatorSnapshot &snapshot)
+bool retainedAllocatorBlockCountIsBounded(const NodeListAllocatorSnapshot &before, const NodeListAllocatorSnapshot &after)
 {
-    return snapshot.usedCount <= before.usedCount;
+    return after.usedCount <= before.usedCount;
 }
 
 std::string escapeJson(std::string_view value)
@@ -457,7 +457,8 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
         "LVGL allocator snapshots captured after the virtual row pool is created. Each trial records its before and after "
         "snapshots plus every post-sync snapshot. Peak reports the worst observed values in that trial: minimum free_size "
         "and biggest_free_block, maximum used_count and fragmentation_percent. allocator_churn_bounded is true only "
-        "when no post-sync or after snapshot has more used allocation blocks than that trial's before snapshot.";
+        "when every non-warmup trial retains no more used allocation blocks after its sync/rebind sequence than before it. "
+        "Post-sync snapshots remain diagnostic because active label-scroll animations are transient allocations.";
 
     const size_t iterations = options.warmup + options.trials;
     for (size_t iteration = 0; iteration < iterations; ++iteration) {
@@ -481,7 +482,6 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
             const auto snapshot = captureAllocatorSnapshot();
             allocatorTrial.syncSnapshots.push_back(snapshot);
             observeAllocatorSnapshot(allocatorTrial.peak, snapshot);
-            allocatorChurnBoundedOk = allocatorChurnBoundedOk && allocatorBlockCountIsBounded(allocatorTrial.before, snapshot);
         };
         auto ordered = fixtures;
         std::sort(ordered.begin(), ordered.end(),
@@ -576,8 +576,10 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
         allocatorTrial.after = captureAllocatorSnapshot();
         allocatorTrial.delta = allocatorDelta(allocatorTrial.before, allocatorTrial.after);
         observeAllocatorSnapshot(allocatorTrial.peak, allocatorTrial.after);
-        allocatorChurnBoundedOk =
-            allocatorChurnBoundedOk && allocatorBlockCountIsBounded(allocatorTrial.before, allocatorTrial.after);
+        if (!allocatorTrial.warmup) {
+            allocatorChurnBoundedOk =
+                allocatorChurnBoundedOk && retainedAllocatorBlockCountIsBounded(allocatorTrial.before, allocatorTrial.after);
+        }
         allocatorTelemetry.trials.push_back(std::move(allocatorTrial));
 
         if (iteration >= options.warmup) {

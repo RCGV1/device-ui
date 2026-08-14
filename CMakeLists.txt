@@ -289,6 +289,15 @@ if(ENABLE_DOCTESTS)
         add_test(NAME MuiNodeListIntegration COMMAND tests
                  "--test-case=*headless display*,*view updates model*,*node model*,*unknown ingress*,*last-heard updates*")
         add_test(NAME NodeListBenchmark COMMAND tests "--test-case=*baseline benchmark emits list diagnostics*")
+        foreach(NODE_LIST_BENCHMARK_NODE_COUNT 25 100 250)
+            add_test(NAME VirtualNodeListAllocator${NODE_LIST_BENCHMARK_NODE_COUNT}
+                     COMMAND node_list_bench
+                     --nodes ${NODE_LIST_BENCHMARK_NODE_COUNT}
+                     --trials 1
+                     --seed 42
+                     --implementation virtual_candidate
+                     --json ${CMAKE_BINARY_DIR}/node-list-allocator-${NODE_LIST_BENCHMARK_NODE_COUNT}.json)
+        endforeach()
         add_test(NAME NodeStore COMMAND tests "--test-case=*node store*")
         add_test(NAME VisibleNodeIndex COMMAND tests "--test-case=*visible index*")
         add_test(NAME VirtualNodeList COMMAND tests "--test-case=*VirtualNodeList*")

@@ -30,6 +30,12 @@ struct ReusableRow {
     lv_obj_t *lblPos2 = nullptr;
     lv_obj_t *lblTm1 = nullptr;
     lv_obj_t *lblTm2 = nullptr;
+    char shortText[5]{};
+    char longText[40]{};
+    char batteryText[32]{};
+    char lastHeardText[32]{};
+    char signalText[32]{};
+    char positionText[48]{};
     NodeId boundId = 0;
 };
 

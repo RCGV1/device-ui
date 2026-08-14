@@ -11,6 +11,12 @@
 
 namespace
 {
+template <size_t Size> void setRowText(lv_obj_t *label, char (&storage)[Size], const char *text)
+{
+    std::snprintf(storage, Size, "%s", text ? text : "");
+    lv_label_set_text_static(label, storage);
+}
+
 void formatLastHeard(uint32_t lastHeard, uint32_t currentTime, char *buffer, size_t bufferSize)
 {
     if (lastHeard == 0) {
@@ -183,6 +189,13 @@ void VirtualNodeList::createRowPool()
         lv_obj_set_size(row.lblTm2, lv_pct(100), LV_SIZE_CONTENT);
         lv_obj_add_flag(row.lblTm2, LV_OBJ_FLAG_HIDDEN);
 
+        lv_label_set_text_static(row.lblShort, row.shortText);
+        lv_label_set_text_static(row.lblLong, row.longText);
+        lv_label_set_text_static(row.lblBat, row.batteryText);
+        lv_label_set_text_static(row.lblLh, row.lastHeardText);
+        lv_label_set_text_static(row.lblSig, row.signalText);
+        lv_label_set_text_static(row.lblPos1, row.positionText);
+
         lv_obj_add_flag(row.panel, LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -267,41 +280,36 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     lv_obj_set_user_data(row.panel, reinterpret_cast<void *>(static_cast<uintptr_t>(record.id)));
     lv_obj_set_user_data(row.btn, reinterpret_cast<void *>(static_cast<uintptr_t>(record.id)));
 
-    lv_label_set_text(row.lblShort, record.user.short_name);
-    lv_label_set_text(row.lblLong, record.user.long_name);
+    setRowText(row.lblShort, row.shortText, record.user.short_name);
+    setRowText(row.lblLong, row.longText, record.user.long_name);
 
     if (record.hasDeviceMetrics) {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%u%% %0.2fV", static_cast<unsigned int>(record.deviceMetrics.battery_level),
-                      record.deviceMetrics.voltage);
-        lv_label_set_text(row.lblBat, buf);
+        std::snprintf(row.batteryText, sizeof(row.batteryText), "%u%% %0.2fV",
+                      static_cast<unsigned int>(record.deviceMetrics.battery_level), record.deviceMetrics.voltage);
     } else {
-        lv_label_set_text(row.lblBat, "");
+        row.batteryText[0] = '\0';
     }
+    lv_label_set_text_static(row.lblBat, row.batteryText);
 
-    char lastHeard[32];
-    formatLastHeard(record.lastHeard, currentTime, lastHeard, sizeof(lastHeard));
-    lv_label_set_text(row.lblLh, lastHeard);
+    formatLastHeard(record.lastHeard, currentTime, row.lastHeardText, sizeof(row.lastHeardText));
+    lv_label_set_text_static(row.lblLh, row.lastHeardText);
 
     if (record.hopsAway >= 0) {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "hops: %d", static_cast<int>(record.hopsAway));
-        lv_label_set_text(row.lblSig, buf);
+        std::snprintf(row.signalText, sizeof(row.signalText), "hops: %d", static_cast<int>(record.hopsAway));
     } else if (record.rssi != 0 || record.snr != 0.0f) {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "rssi: %d", static_cast<int>(record.rssi));
-        lv_label_set_text(row.lblSig, buf);
+        std::snprintf(row.signalText, sizeof(row.signalText), "rssi: %d", static_cast<int>(record.rssi));
     } else {
-        lv_label_set_text(row.lblSig, "");
+        row.signalText[0] = '\0';
     }
+    lv_label_set_text_static(row.lblSig, row.signalText);
 
     const int32_t height = isExpanded ? EXPANDED_ROW_HEIGHT : COLLAPSED_ROW_HEIGHT;
     lv_obj_set_height(row.panel, height);
 
     if (isExpanded && record.position.known) {
-        char buf[48];
-        std::snprintf(buf, sizeof(buf), "%.5f %.5f", record.position.latitude * 1e-7, record.position.longitude * 1e-7);
-        lv_label_set_text(row.lblPos1, buf);
+        std::snprintf(row.positionText, sizeof(row.positionText), "%.5f %.5f", record.position.latitude * 1e-7,
+                      record.position.longitude * 1e-7);
+        lv_label_set_text_static(row.lblPos1, row.positionText);
         lv_obj_remove_flag(row.lblPos1, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(row.lblPos1, LV_OBJ_FLAG_HIDDEN);

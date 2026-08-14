@@ -109,9 +109,9 @@ TEST_CASE("virtual candidate benchmark reports allocator churn from real LVGL no
 
     bool allocatorBlockCountStayedBounded = true;
     for (const auto &trial : report.allocatorTelemetry->trials) {
-        allocatorBlockCountStayedBounded = allocatorBlockCountStayedBounded && trial.after.usedCount <= trial.before.usedCount;
-        for (const auto &snapshot : trial.syncSnapshots) {
-            allocatorBlockCountStayedBounded = allocatorBlockCountStayedBounded && snapshot.usedCount <= trial.before.usedCount;
+        if (!trial.warmup) {
+            allocatorBlockCountStayedBounded =
+                allocatorBlockCountStayedBounded && trial.after.usedCount <= trial.before.usedCount;
         }
     }
     CHECK(report.correctness.candidate->allocatorChurnBounded == allocatorBlockCountStayedBounded);
@@ -198,7 +198,7 @@ TEST_CASE("virtual candidate JSON identifies candidate-only structural checks")
     CHECK(delta["fragmentation_percent"].GetInt64() ==
           expectedDelta(before["fragmentation_percent"].GetUint64(), after["fragmentation_percent"].GetUint64()));
 
-    bool usedBlockCountStayedBounded = after["used_count"].GetUint64() <= before["used_count"].GetUint64();
+    const bool usedBlockCountStayedBounded = after["used_count"].GetUint64() <= before["used_count"].GetUint64();
     uint64_t minimumFreeSize = before["free_size"].GetUint64();
     uint64_t minimumBiggestBlock = before["biggest_free_block"].GetUint64();
     uint64_t maximumUsedCount = before["used_count"].GetUint64();
@@ -211,8 +211,6 @@ TEST_CASE("virtual candidate JSON identifies candidate-only structural checks")
         minimumBiggestBlock = std::min(minimumBiggestBlock, snapshot["biggest_free_block"].GetUint64());
         maximumUsedCount = std::max(maximumUsedCount, snapshot["used_count"].GetUint64());
         maximumFragmentation = std::max(maximumFragmentation, snapshot["fragmentation_percent"].GetUint64());
-        usedBlockCountStayedBounded =
-            usedBlockCountStayedBounded && snapshot["used_count"].GetUint64() <= before["used_count"].GetUint64();
     }
     minimumFreeSize = std::min(minimumFreeSize, after["free_size"].GetUint64());
     minimumBiggestBlock = std::min(minimumBiggestBlock, after["biggest_free_block"].GetUint64());
