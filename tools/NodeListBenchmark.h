@@ -5,11 +5,17 @@
 #include <string>
 #include <vector>
 
+enum class NodeListBenchmarkImplementation {
+    Legacy,
+    VirtualCandidate,
+};
+
 struct NodeListBenchmarkOptions {
     size_t nodes;
     size_t trials;
     uint32_t seed;
     size_t warmup;
+    NodeListBenchmarkImplementation implementation = NodeListBenchmarkImplementation::Legacy;
 };
 
 struct NodeListDurationSummary {
@@ -28,6 +34,10 @@ struct NodeListBenchmarkReport {
         std::string revision;
         bool dirty = false;
     } source;
+    struct {
+        std::string name;
+        std::string comparisonScope;
+    } implementation;
     struct {
         std::string version;
         size_t totalObjects = 0;
@@ -73,6 +83,8 @@ struct NodeListBenchmarkReport {
         bool capPurge = false;
         bool resyncPresentationPreservedNodes = false;
         bool offscreenUpdate = false;
+        bool poolBounded = false;
+        bool objectCountStable = false;
         bool all = false;
     } correctness;
 };

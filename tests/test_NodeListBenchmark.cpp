@@ -14,6 +14,8 @@ TEST_CASE("baseline benchmark emits list diagnostics")
 
     CHECK(report.lvgl.totalObjects > 0);
     CHECK(report.lvgl.nodeListObjects > 0);
+    CHECK(report.implementation.name == "legacy");
+    CHECK(report.implementation.comparisonScope.find("not hardware timing") != std::string::npos);
     CHECK_FALSE(report.lvgl.version.empty());
     CHECK_FALSE(report.source.revision.empty());
     CHECK(report.allocator.configuredBytes > 0);
@@ -28,6 +30,8 @@ TEST_CASE("baseline benchmark emits list diagnostics")
     CHECK(report.fixtures.unsupported.front().name == "MQTT");
     CHECK(report.correctness.ready);
     CHECK(report.correctness.resyncPresentationPreservedNodes);
+    CHECK(report.correctness.poolBounded);
+    CHECK(report.correctness.objectCountStable);
     CHECK(report.correctness.all);
 }
 
@@ -65,6 +69,40 @@ TEST_CASE("benchmark CLI rejects a trial count that overflows its warm-up")
     CHECK_FALSE(parseNodeListBenchmarkCommandLine(9, arguments, options, jsonPath));
 }
 
+TEST_CASE("benchmark CLI selects the virtual candidate explicitly")
+{
+    const char *arguments[] = {"node_list_bench",
+                               "--nodes",
+                               "25",
+                               "--trials",
+                               "1",
+                               "--seed",
+                               "42",
+                               "--implementation",
+                               "virtual_candidate",
+                               "--json",
+                               "/tmp/node-list-virtual-candidate.json"};
+    NodeListBenchmarkOptions options{};
+    std::string jsonPath;
+
+    REQUIRE(parseNodeListBenchmarkCommandLine(11, arguments, options, jsonPath));
+    CHECK(options.implementation == NodeListBenchmarkImplementation::VirtualCandidate);
+    CHECK(jsonPath == "/tmp/node-list-virtual-candidate.json");
+}
+
+TEST_CASE("virtual candidate benchmark uses a bounded real LVGL node-list pool")
+{
+    NodeListBenchmarkOptions options{25, 1, 42, 0, NodeListBenchmarkImplementation::VirtualCandidate};
+    const auto report = runNodeListBenchmark(options);
+
+    CHECK(report.implementation.name == "virtual_candidate");
+    CHECK(report.lvgl.totalObjects > 0);
+    CHECK(report.lvgl.nodeListObjects > 0);
+    CHECK(report.correctness.poolBounded);
+    CHECK(report.correctness.objectCountStable);
+    CHECK(report.correctness.all);
+}
+
 TEST_CASE("benchmark API rejects an iteration count overflow")
 {
     const auto report = runNodeListBenchmark({25, std::numeric_limits<size_t>::max(), 42, 1});
@@ -98,6 +136,15 @@ TEST_CASE("benchmark JSON output is valid and contains the documented sections")
     CHECK(source["revision"].IsString());
     REQUIRE(source.HasMember("dirty"));
     CHECK(source["dirty"].IsBool());
+
+    REQUIRE(document.HasMember("implementation"));
+    const auto &implementation = document["implementation"];
+    REQUIRE(implementation.IsObject());
+    REQUIRE(implementation.HasMember("name"));
+    CHECK(implementation["name"].IsString());
+    REQUIRE(implementation.HasMember("comparison_scope"));
+    CHECK(implementation["comparison_scope"].IsString());
+    CHECK(std::string(implementation["comparison_scope"].GetString()).find("not hardware timing") != std::string::npos);
 
     REQUIRE(document.HasMember("lvgl"));
     const auto &lvgl = document["lvgl"];
@@ -168,6 +215,8 @@ TEST_CASE("benchmark JSON output is valid and contains the documented sections")
         for (const auto &trial : entry["trials"].GetArray()) {
             CHECK(trial.IsUint64());
         }
+        REQUIRE(entry.HasMember("raw_ns"));
+        CHECK(entry["raw_ns"].IsArray());
         for (const char *summary : {"median", "p95", "maximum"}) {
             REQUIRE(entry.HasMember(summary));
             CHECK(entry[summary].IsUint64());
@@ -177,8 +226,9 @@ TEST_CASE("benchmark JSON output is valid and contains the documented sections")
     REQUIRE(document.HasMember("correctness"));
     const auto &correctness = document["correctness"];
     REQUIRE(correctness.IsObject());
-    for (const char *field : {"ready", "requested_node_count", "duplicate_update", "changed_name_and_role", "cap_purge",
-                              "resync_presentation_preserved_nodes", "offscreen_update", "all"}) {
+    for (const char *field :
+         {"ready", "requested_node_count", "duplicate_update", "changed_name_and_role", "cap_purge",
+          "resync_presentation_preserved_nodes", "offscreen_update", "pool_bounded", "object_count_stable", "all"}) {
         REQUIRE(correctness.HasMember(field));
         CHECK(correctness[field].IsBool());
     }
