@@ -1,3 +1,5 @@
+#pragma once
+
 #include "graphics/common/MeshtasticView.h"
 #include "graphics/common/NodeStore.h"
 #include "graphics/common/VisibleNodeIndex.h"
