@@ -157,6 +157,11 @@ lv_obj_t *TFTView_320x240::nodeListRootForTesting(void) const
     return objects.nodes_panel;
 }
 
+void TFTView_320x240::showNodesScreenForTesting(void)
+{
+    ui_set_active(objects.nodes_button, objects.nodes_panel, objects.top_nodes_panel);
+}
+
 void TFTView_320x240::resetNodeListForTesting(void)
 {
     while (!nodeObjects.empty()) {

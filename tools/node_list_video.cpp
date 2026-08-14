@@ -132,6 +132,7 @@ bool captureVideo(const NodeListVideoOptions &options)
     } else {
         virtualList = populateVirtual(harness, fixtures, store, visibleIndex, sink);
     }
+    harness.showNodesScreen();
 
     auto deadline = std::chrono::steady_clock::now();
     for (size_t frame = 0; frame < options.outputFrames; ++frame) {

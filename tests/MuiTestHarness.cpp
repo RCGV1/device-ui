@@ -185,6 +185,11 @@ lv_obj_t *MuiTestHarness::nodeListRootForTesting() const
     return view->nodeListRootForTesting();
 }
 
+void MuiTestHarness::showNodesScreen()
+{
+    view->showNodesScreenForTesting();
+}
+
 HeadlessDisplayDriver *MuiTestHarness::displayDriverForTesting() const
 {
     return driver;

@@ -42,6 +42,7 @@ class MuiTestHarness
     const NodeStore &store() const;
     const VisibleNodeIndex &visibleIndex() const;
     lv_obj_t *nodeListRootForTesting() const;
+    void showNodesScreen();
     HeadlessDisplayDriver *displayDriverForTesting() const;
 
   private:

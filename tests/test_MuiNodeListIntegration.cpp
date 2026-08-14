@@ -24,6 +24,17 @@ TEST_CASE("deterministic headless display remains valid across harness instances
     CHECK(secondHarness.objectCount() > 0);
 }
 
+TEST_CASE("test harness can activate the populated nodes screen")
+{
+    MuiTestHarness harness;
+    REQUIRE(harness.ready());
+    REQUIRE(lv_obj_has_flag(harness.nodeListRootForTesting(), LV_OBJ_FLAG_HIDDEN));
+
+    harness.showNodesScreen();
+
+    CHECK_FALSE(lv_obj_has_flag(harness.nodeListRootForTesting(), LV_OBJ_FLAG_HIDDEN));
+}
+
 TEST_CASE("view updates model fields before rendering a current row")
 {
     MuiTestHarness harness;
