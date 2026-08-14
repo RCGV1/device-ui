@@ -43,7 +43,7 @@ class VirtualNodeList
     VirtualNodeList(lv_obj_t *parent, NodeListActionSink &sink);
     ~VirtualNodeList();
 
-    void sync(const NodeStore &store, const VisibleNodeIndex &index, NodeId expanded = 0);
+    void sync(const NodeStore &store, const VisibleNodeIndex &index, NodeId expanded = 0, uint32_t currentTime = 0);
     void setExpanded(NodeId id);
     NodeId getExpanded() const { return expandedId; }
     void scrollTo(NodeId id, lv_anim_enable_t anim = LV_ANIM_OFF);
@@ -67,6 +67,7 @@ class VirtualNodeList
     const NodeStore *currentStore = nullptr;
     const VisibleNodeIndex *currentIndex = nullptr;
     NodeId expandedId = 0;
+    uint32_t currentTime = 0;
 
     std::vector<ReusableRow> rowPool;
     std::vector<int32_t> prefixHeights;

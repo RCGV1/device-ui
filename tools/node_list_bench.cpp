@@ -417,7 +417,7 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
 
         auto sync = [&] {
             index.rebuild(store, filter, 0);
-            list->sync(store, index);
+            list->sync(store, index, 0, 1700000000U);
             harness.pump();
             objectCountStableOk = objectCountStableOk && harness.objectCount() == pooledObjectCount &&
                                   harness.nodeListObjectCount() == pooledNodeListObjectCount;

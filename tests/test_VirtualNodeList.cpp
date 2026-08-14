@@ -16,6 +16,22 @@ class DummyActionSink : public NodeListActionSink
     NodeId lastFocused = 0;
 };
 
+namespace
+{
+lv_obj_t *boundRow(lv_obj_t *parent, NodeId id)
+{
+    const uint32_t childCount = lv_obj_get_child_count(parent);
+    for (uint32_t index = 0; index < childCount; ++index) {
+        lv_obj_t *child = lv_obj_get_child(parent, static_cast<int32_t>(index));
+        if (static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(child))) == id) {
+            return child;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
+
 TEST_CASE("VirtualNodeList row pool remains strictly bounded")
 {
     MuiTestHarness harness;
@@ -60,6 +76,77 @@ TEST_CASE("VirtualNodeList row pool remains strictly bounded")
 
     // The LVGL object count in the node list must be IDENTICAL between 25 and 250 nodes!
     CHECK(objectsAt250 == objectsAt25);
+}
+
+TEST_CASE("VirtualNodeList collapsed rows retain the legacy label geometry")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    meshtastic_User user{};
+    std::strcpy(user.short_name, "NODE");
+    std::strcpy(user.long_name, "Readable Candidate Node");
+    store.upsertUser(0x12345678, 0, 1700000000U, user, false);
+    index.rebuild(store, filter, 0);
+    list.sync(store, index);
+    harness.pump();
+
+    lv_obj_t *row = boundRow(parent, 0x12345678);
+    REQUIRE(row != nullptr);
+    REQUIRE(lv_obj_get_child_count(row) == 11);
+
+    lv_obj_t *shortName = lv_obj_get_child(row, 3);
+    lv_obj_t *battery = lv_obj_get_child(row, 4);
+    lv_obj_t *lastHeard = lv_obj_get_child(row, 5);
+    lv_obj_t *signal = lv_obj_get_child(row, 6);
+
+    CHECK(lv_obj_get_x_aligned(shortName) == 30);
+    CHECK(lv_obj_get_y_aligned(shortName) == 10);
+    CHECK(lv_obj_get_style_align(shortName, LV_PART_MAIN) == LV_ALIGN_TOP_LEFT);
+
+    CHECK(lv_obj_get_x_aligned(battery) == 8);
+    CHECK(lv_obj_get_y_aligned(battery) == 17);
+    CHECK(lv_obj_get_style_align(battery, LV_PART_MAIN) == LV_ALIGN_TOP_RIGHT);
+    CHECK(lv_obj_get_x_aligned(lastHeard) == 8);
+    CHECK(lv_obj_get_y_aligned(lastHeard) == 33);
+    CHECK(lv_obj_get_style_align(lastHeard, LV_PART_MAIN) == LV_ALIGN_TOP_RIGHT);
+    CHECK(lv_obj_get_x_aligned(signal) == 8);
+    CHECK(lv_obj_get_y_aligned(signal) == 1);
+    CHECK(lv_obj_get_style_align(signal, LV_PART_MAIN) == LV_ALIGN_TOP_RIGHT);
+}
+
+TEST_CASE("VirtualNodeList renders last-heard ages against the supplied current time")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    meshtastic_User user{};
+    std::strcpy(user.short_name, "NODE");
+    std::strcpy(user.long_name, "Recently Heard Node");
+    store.upsertUser(0x12345678, 0, 1699999880U, user, false);
+    index.rebuild(store, filter, 0);
+
+    list.sync(store, index, 0, 1700000000U);
+    harness.pump();
+    lv_obj_t *row = boundRow(parent, 0x12345678);
+    REQUIRE(row != nullptr);
+    CHECK(std::string(lv_label_get_text(lv_obj_get_child(row, 5))) == "2 min");
 }
 
 TEST_CASE("VirtualNodeList expansion and stable selection")

@@ -1,8 +1,37 @@
 #include "graphics/view/TFT/VirtualNodeList.h"
 
+#include "fonts.h"
+#include "images.h"
+#include "styles.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
+
+namespace
+{
+void formatLastHeard(uint32_t lastHeard, uint32_t currentTime, char *buffer, size_t bufferSize)
+{
+    if (lastHeard == 0) {
+        buffer[0] = '\0';
+        return;
+    }
+
+    const uint32_t age = currentTime > lastHeard ? currentTime - lastHeard : 0;
+    if (age < 60) {
+        std::snprintf(buffer, bufferSize, "now");
+    } else if (age < 3600) {
+        std::snprintf(buffer, bufferSize, "%u min", age / 60);
+    } else if (age < 86400) {
+        std::snprintf(buffer, bufferSize, "%u h", age / 3600);
+    } else if (age < 86400 * 60) {
+        std::snprintf(buffer, bufferSize, "%u d", age / 86400);
+    } else {
+        buffer[0] = '\0';
+    }
+}
+} // namespace
 
 VirtualNodeList::VirtualNodeList(lv_obj_t *parent, NodeListActionSink &sink) : parentPanel(parent), actionSink(sink)
 {
@@ -60,17 +89,33 @@ void VirtualNodeList::createRowPool()
         lv_obj_set_style_pad_top(row.panel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_pad_bottom(row.panel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_remove_flag(row.panel, static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE));
+        add_style_node_panel_style(row.panel);
+        lv_obj_set_style_radius(row.panel, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_color(row.panel, lv_color_hex(0xfffff4), LV_PART_MAIN | LV_STATE_PRESSED);
 
         row.img = lv_image_create(row.panel);
         lv_obj_set_pos(row.img, -5, 3);
         lv_obj_set_size(row.img, 32, 32);
+        lv_image_set_src(row.img, &img_node_client_image);
+        lv_image_set_pivot(row.img, 0, 0);
         lv_obj_clear_flag(row.img, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_align(row.img, LV_ALIGN_TOP_LEFT, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_radius(row.img, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_image_recolor(row.img, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_image_recolor_opa(row.img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_color(row.img, lv_color_hex(0x5d9388), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_opa(row.img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_color(row.img, lv_color_hex(0xff5555), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(row.img, 3, LV_PART_MAIN | LV_STATE_DEFAULT);
 
         row.btn = lv_button_create(row.panel);
         lv_obj_set_pos(row.btn, 0, 0);
         lv_obj_set_size(row.btn, lv_pct(106), lv_pct(100));
         lv_obj_set_align(row.btn, LV_ALIGN_CENTER);
+        add_style_node_button_style(row.btn);
+        lv_obj_set_style_shadow_width(row.btn, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_max_height(row.btn, 132, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_min_height(row.btn, 50, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_add_flag(row.btn, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
         lv_obj_add_event_cb(row.btn, rowClickCallback, LV_EVENT_ALL, this);
 
@@ -78,33 +123,54 @@ void VirtualNodeList::createRowPool()
         lv_obj_set_pos(row.lblLong, -5, 35);
         lv_obj_set_size(row.lblLong, lv_pct(80), LV_SIZE_CONTENT);
         lv_label_set_long_mode(row.lblLong, LV_LABEL_LONG_SCROLL);
+        lv_obj_set_style_align(row.lblLong, LV_ALIGN_TOP_LEFT, LV_PART_MAIN | LV_STATE_DEFAULT);
 
         row.lblShort = lv_label_create(row.panel);
-        lv_obj_set_pos(row.lblShort, 30, 2);
-        lv_obj_set_size(row.lblShort, lv_pct(32), LV_SIZE_CONTENT);
+        lv_obj_set_pos(row.lblShort, 30, 10);
+        lv_obj_set_size(row.lblShort, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_remove_flag(row.lblShort, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_align(row.lblShort, LV_ALIGN_TOP_LEFT, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_font(row.lblShort, &ui_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
 
         row.lblBat = lv_label_create(row.panel);
-        lv_obj_set_pos(row.lblBat, 30, 18);
-        lv_obj_set_size(row.lblBat, lv_pct(32), LV_SIZE_CONTENT);
+        lv_obj_set_pos(row.lblBat, 8, 17);
+        lv_obj_set_size(row.lblBat, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_label_set_long_mode(row.lblBat, LV_LABEL_LONG_CLIP);
+        lv_obj_remove_flag(row.lblBat, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_align(row.lblBat, LV_ALIGN_TOP_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_align(row.lblBat, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
 
         row.lblLh = lv_label_create(row.panel);
-        lv_obj_set_pos(row.lblLh, -3, 3);
-        lv_obj_set_size(row.lblLh, lv_pct(33), LV_SIZE_CONTENT);
+        lv_obj_set_pos(row.lblLh, 8, 33);
+        lv_obj_set_size(row.lblLh, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_label_set_long_mode(row.lblLh, LV_LABEL_LONG_CLIP);
+        lv_obj_remove_flag(row.lblLh, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_align(row.lblLh, LV_ALIGN_TOP_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_text_align(row.lblLh, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
 
         row.lblSig = lv_label_create(row.panel);
-        lv_obj_set_pos(row.lblSig, -3, 19);
-        lv_obj_set_size(row.lblSig, lv_pct(33), LV_SIZE_CONTENT);
+        lv_obj_set_pos(row.lblSig, 8, 1);
+        lv_obj_set_size(row.lblSig, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_label_set_long_mode(row.lblSig, LV_LABEL_LONG_CLIP);
+        lv_obj_remove_flag(row.lblSig, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_align(row.lblSig, LV_ALIGN_TOP_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_text_align(row.lblSig, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
 
         row.lblPos1 = lv_label_create(row.panel);
-        lv_obj_set_pos(row.lblPos1, 0, 52);
-        lv_obj_set_size(row.lblPos1, lv_pct(100), LV_SIZE_CONTENT);
+        lv_obj_set_pos(row.lblPos1, -5, 49);
+        lv_obj_set_size(row.lblPos1, 120, LV_SIZE_CONTENT);
+        lv_label_set_long_mode(row.lblPos1, LV_LABEL_LONG_CLIP);
+        lv_obj_remove_flag(row.lblPos1, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_align(row.lblPos1, LV_ALIGN_TOP_LEFT, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_color(row.lblPos1, lv_color_hex(0x05f6cb), LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_add_flag(row.lblPos1, LV_OBJ_FLAG_HIDDEN);
 
         row.lblPos2 = lv_label_create(row.panel);
-        lv_obj_set_pos(row.lblPos2, 0, 68);
-        lv_obj_set_size(row.lblPos2, lv_pct(100), LV_SIZE_CONTENT);
+        lv_obj_set_pos(row.lblPos2, -5, 63);
+        lv_obj_set_size(row.lblPos2, 108, LV_SIZE_CONTENT);
+        lv_label_set_long_mode(row.lblPos2, LV_LABEL_LONG_SCROLL);
+        lv_obj_remove_flag(row.lblPos2, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_align(row.lblPos2, LV_ALIGN_TOP_LEFT, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_add_flag(row.lblPos2, LV_OBJ_FLAG_HIDDEN);
 
         row.lblTm1 = lv_label_create(row.panel);
@@ -146,11 +212,12 @@ void VirtualNodeList::updateVirtualContentHeight()
     }
 }
 
-void VirtualNodeList::sync(const NodeStore &store, const VisibleNodeIndex &index, NodeId expanded)
+void VirtualNodeList::sync(const NodeStore &store, const VisibleNodeIndex &index, NodeId expanded, uint32_t now)
 {
     currentStore = &store;
     currentIndex = &index;
     expandedId = expanded;
+    currentTime = now != 0 ? now : static_cast<uint32_t>(std::time(nullptr));
 
     updateVirtualContentHeight();
     refreshVisibleRows();
@@ -212,13 +279,9 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
         lv_label_set_text(row.lblBat, "");
     }
 
-    if (record.lastHeard > 0) {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%us ago", record.lastHeard);
-        lv_label_set_text(row.lblLh, buf);
-    } else {
-        lv_label_set_text(row.lblLh, "");
-    }
+    char lastHeard[32];
+    formatLastHeard(record.lastHeard, currentTime, lastHeard, sizeof(lastHeard));
+    lv_label_set_text(row.lblLh, lastHeard);
 
     if (record.hopsAway >= 0) {
         char buf[32];
