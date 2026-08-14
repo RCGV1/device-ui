@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -74,6 +75,7 @@ struct NodeListBenchmarkReport {
         NodeListDurationSummary updateNs;
         NodeListDurationSummary reorderInsertNs;
         NodeListDurationSummary filterNs;
+        NodeListDurationSummary visibleIndexRebuildNs;
     } timing;
     struct {
         bool ready = false;
@@ -83,8 +85,12 @@ struct NodeListBenchmarkReport {
         bool capPurge = false;
         bool resyncPresentationPreservedNodes = false;
         bool offscreenUpdate = false;
-        bool poolBounded = false;
-        bool objectCountStable = false;
+        struct Candidate {
+            bool poolBounded = false;
+            bool objectCountStable = false;
+            bool presentation = false;
+        };
+        std::optional<Candidate> candidate;
         bool all = false;
     } correctness;
 };

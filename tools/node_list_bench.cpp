@@ -207,6 +207,26 @@ void applyMixedState(NodeStore &store, const std::vector<NodeFixture> &fixtures)
     }
 }
 
+bool hasPresentedNode(lv_obj_t *parent, NodeId id, const char *name)
+{
+    const uint32_t childCount = lv_obj_get_child_count(parent);
+    for (uint32_t i = 0; i < childCount; ++i) {
+        lv_obj_t *row = lv_obj_get_child(parent, static_cast<int32_t>(i));
+        if (static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(row))) != id ||
+            lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN)) {
+            continue;
+        }
+        const uint32_t rowChildCount = lv_obj_get_child_count(row);
+        for (uint32_t j = 0; j < rowChildCount; ++j) {
+            lv_obj_t *child = lv_obj_get_child(row, static_cast<int32_t>(j));
+            if (lv_obj_check_type(child, &lv_label_class) && std::strcmp(lv_label_get_text(child), name) == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 NodeListDurationSummary summarize(std::vector<uint64_t> values)
 {
     NodeListDurationSummary summary;
@@ -376,10 +396,12 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
     bool offscreenUpdateOk = true;
     bool poolBoundedOk = list->boundRowCount() == VirtualNodeList::POOL_SIZE;
     bool objectCountStableOk = true;
+    bool presentationOk = true;
 
     const size_t iterations = options.warmup + options.trials;
     for (size_t iteration = 0; iteration < iterations; ++iteration) {
         auto fixtures = makeFixtures(options.nodes, options.seed, iteration);
+        harness.setCurrentTime(1700000000U);
         NodeStore store;
         VisibleNodeIndex index;
         NodeListFilter filter;
@@ -404,8 +426,10 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
         const uint64_t updateNs = measureNs([&] {
             for (size_t i = 0; i < fixtures.size(); ++i) {
                 const auto &fixture = fixtures[i];
-                store.upsertUser(fixture.id, fixture.channel, fixture.lastHeard,
-                                 makeUser(fixture, "Updated Node " + std::to_string(i)), false);
+                NodeFixture updated = fixture;
+                updated.role = static_cast<uint8_t>((fixture.role + 1) % 7);
+                store.upsertUser(updated.id, updated.channel, updated.lastHeard,
+                                 makeUser(updated, "Updated Node " + std::to_string(i)), false);
             }
             sync();
         });
@@ -453,13 +477,10 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
                                std::strcmp(changedRecord->user.long_name, "Duplicate Final") == 0 &&
                                changedRecord->user.role == meshtastic_Config_DeviceConfig_Role_ROUTER;
 
-        const uint64_t filterNs = measureNs([&] {
-            filter.publicKey = true;
-            sync();
-            filter.publicKey = false;
-            sync();
-        });
-        list->sync(store, index);
+        const uint64_t visibleIndexRebuildNs = measureNs([&] { sync(); });
+        list->scrollTo(changed.id, LV_ANIM_OFF);
+        harness.pump();
+        presentationOk = presentationOk && hasPresentedNode(container, changed.id, "Duplicate Final");
         resyncPresentationOk = resyncPresentationOk && index.ids().size() == options.nodes;
 
         if (options.nodes == 250) {
@@ -487,14 +508,14 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
             insertSamples.push_back(insertNs);
             updateSamples.push_back(updateNs);
             reorderSamples.push_back(reorderNs);
-            filterSamples.push_back(filterNs);
+            filterSamples.push_back(visibleIndexRebuildNs);
         }
     }
 
     report.timing.insertNs = summarize(std::move(insertSamples));
     report.timing.updateNs = summarize(std::move(updateSamples));
     report.timing.reorderInsertNs = summarize(std::move(reorderSamples));
-    report.timing.filterNs = summarize(std::move(filterSamples));
+    report.timing.visibleIndexRebuildNs = summarize(std::move(filterSamples));
     report.lvgl.totalObjects = harness.objectCount();
     report.lvgl.nodeListObjects = harness.nodeListObjectCount();
 
@@ -516,13 +537,13 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
     report.correctness.capPurge = capPurgeOk;
     report.correctness.resyncPresentationPreservedNodes = resyncPresentationOk;
     report.correctness.offscreenUpdate = offscreenUpdateOk;
-    report.correctness.poolBounded = poolBoundedOk;
-    report.correctness.objectCountStable = objectCountStableOk;
+    report.correctness.candidate = {poolBoundedOk, objectCountStableOk, presentationOk};
     report.correctness.all = report.correctness.ready && report.correctness.requestedNodeCount &&
                              report.correctness.duplicateUpdate && report.correctness.changedNameAndRole &&
                              report.correctness.capPurge && report.correctness.resyncPresentationPreservedNodes &&
-                             report.correctness.offscreenUpdate && report.correctness.poolBounded &&
-                             report.correctness.objectCountStable && report.memory.integrityOk;
+                             report.correctness.offscreenUpdate && report.correctness.candidate->poolBounded &&
+                             report.correctness.candidate->objectCountStable && report.correctness.candidate->presentation &&
+                             report.memory.integrityOk;
     list.reset();
     lv_obj_delete(container);
     return report;
@@ -695,13 +716,10 @@ NodeListBenchmarkReport runNodeListBenchmark(const NodeListBenchmarkOptions &opt
     report.correctness.capPurge = capPurgeOk;
     report.correctness.resyncPresentationPreservedNodes = resyncPresentationOk;
     report.correctness.offscreenUpdate = offscreenUpdateOk;
-    report.correctness.poolBounded = true;
-    report.correctness.objectCountStable = true;
     report.correctness.all = report.correctness.ready && report.correctness.requestedNodeCount &&
                              report.correctness.duplicateUpdate && report.correctness.changedNameAndRole &&
                              report.correctness.capPurge && report.correctness.resyncPresentationPreservedNodes &&
-                             report.correctness.offscreenUpdate && report.correctness.poolBounded &&
-                             report.correctness.objectCountStable && report.memory.integrityOk;
+                             report.correctness.offscreenUpdate && report.memory.integrityOk;
     return report;
 }
 
@@ -752,6 +770,8 @@ bool writeNodeListBenchmarkJson(const NodeListBenchmarkReport &report, const std
     writeDuration(output, report.timing.reorderInsertNs, 4);
     output << ",\n    \"filter_ns\": ";
     writeDuration(output, report.timing.filterNs, 4);
+    output << ",\n    \"visible_index_rebuild_ns\": ";
+    writeDuration(output, report.timing.visibleIndexRebuildNs, 4);
     output << "\n  },\n"
            << "  \"correctness\": {\"ready\": " << (report.correctness.ready ? "true" : "false")
            << ", \"requested_node_count\": " << (report.correctness.requestedNodeCount ? "true" : "false")
@@ -760,10 +780,16 @@ bool writeNodeListBenchmarkJson(const NodeListBenchmarkReport &report, const std
            << ", \"cap_purge\": " << (report.correctness.capPurge ? "true" : "false")
            << ", \"resync_presentation_preserved_nodes\": "
            << (report.correctness.resyncPresentationPreservedNodes ? "true" : "false")
-           << ", \"offscreen_update\": " << (report.correctness.offscreenUpdate ? "true" : "false")
-           << ", \"pool_bounded\": " << (report.correctness.poolBounded ? "true" : "false")
-           << ", \"object_count_stable\": " << (report.correctness.objectCountStable ? "true" : "false")
-           << ", \"all\": " << (report.correctness.all ? "true" : "false") << "}\n}\n";
+           << ", \"offscreen_update\": " << (report.correctness.offscreenUpdate ? "true" : "false") << ", \"candidate\": ";
+    if (report.correctness.candidate.has_value()) {
+        const auto &candidate = report.correctness.candidate.value();
+        output << "{\"pool_bounded\": " << (candidate.poolBounded ? "true" : "false")
+               << ", \"object_count_stable\": " << (candidate.objectCountStable ? "true" : "false")
+               << ", \"presentation\": " << (candidate.presentation ? "true" : "false") << '}';
+    } else {
+        output << "null";
+    }
+    output << ", \"all\": " << (report.correctness.all ? "true" : "false") << "}\n}\n";
 
     if (!output) {
         error = "failed while writing JSON output path: " + path;

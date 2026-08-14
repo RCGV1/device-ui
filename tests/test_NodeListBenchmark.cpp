@@ -30,8 +30,7 @@ TEST_CASE("baseline benchmark emits list diagnostics")
     CHECK(report.fixtures.unsupported.front().name == "MQTT");
     CHECK(report.correctness.ready);
     CHECK(report.correctness.resyncPresentationPreservedNodes);
-    CHECK(report.correctness.poolBounded);
-    CHECK(report.correctness.objectCountStable);
+    CHECK_FALSE(report.correctness.candidate.has_value());
     CHECK(report.correctness.all);
 }
 
@@ -98,9 +97,42 @@ TEST_CASE("virtual candidate benchmark uses a bounded real LVGL node-list pool")
     CHECK(report.implementation.name == "virtual_candidate");
     CHECK(report.lvgl.totalObjects > 0);
     CHECK(report.lvgl.nodeListObjects > 0);
-    CHECK(report.correctness.poolBounded);
-    CHECK(report.correctness.objectCountStable);
+    REQUIRE(report.correctness.candidate.has_value());
+    CHECK(report.correctness.candidate->poolBounded);
+    CHECK(report.correctness.candidate->objectCountStable);
+    CHECK(report.correctness.candidate->presentation);
     CHECK(report.correctness.all);
+}
+
+TEST_CASE("virtual candidate JSON identifies candidate-only structural checks")
+{
+    const auto report = runNodeListBenchmark({25, 1, 42, 0, NodeListBenchmarkImplementation::VirtualCandidate});
+    const auto outputPath = std::filesystem::temp_directory_path() /
+                            ("device-ui-node-list-candidate-" + std::to_string(reinterpret_cast<uintptr_t>(&report)) + ".json");
+    std::string error;
+    REQUIRE(writeNodeListBenchmarkJson(report, outputPath.string(), error));
+
+    std::ifstream input(outputPath, std::ios::binary);
+    const std::string json((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    rapidjson::Document document;
+    document.Parse(json.c_str());
+
+    REQUIRE_FALSE(document.HasParseError());
+    REQUIRE(document["implementation"]["name"].IsString());
+    CHECK(std::string(document["implementation"]["name"].GetString()) == "virtual_candidate");
+    REQUIRE(document["timing"].HasMember("visible_index_rebuild_ns"));
+    REQUIRE(document["correctness"].HasMember("candidate"));
+    const auto &candidate = document["correctness"]["candidate"];
+    REQUIRE(candidate.IsObject());
+    for (const char *field : {"pool_bounded", "object_count_stable", "presentation"}) {
+        REQUIRE(candidate.HasMember(field));
+        CHECK(candidate[field].IsBool());
+        CHECK(candidate[field].GetBool());
+    }
+
+    std::error_code removeError;
+    std::filesystem::remove(outputPath, removeError);
+    CHECK_FALSE(removeError);
 }
 
 TEST_CASE("benchmark API rejects an iteration count overflow")
@@ -206,7 +238,7 @@ TEST_CASE("benchmark JSON output is valid and contains the documented sections")
     REQUIRE(document.HasMember("timing"));
     const auto &timing = document["timing"];
     REQUIRE(timing.IsObject());
-    for (const char *operation : {"insert_ns", "update_ns", "reorder_insert_ns", "filter_ns"}) {
+    for (const char *operation : {"insert_ns", "update_ns", "reorder_insert_ns", "filter_ns", "visible_index_rebuild_ns"}) {
         REQUIRE(timing.HasMember(operation));
         const auto &entry = timing[operation];
         REQUIRE(entry.IsObject());
@@ -226,12 +258,13 @@ TEST_CASE("benchmark JSON output is valid and contains the documented sections")
     REQUIRE(document.HasMember("correctness"));
     const auto &correctness = document["correctness"];
     REQUIRE(correctness.IsObject());
-    for (const char *field :
-         {"ready", "requested_node_count", "duplicate_update", "changed_name_and_role", "cap_purge",
-          "resync_presentation_preserved_nodes", "offscreen_update", "pool_bounded", "object_count_stable", "all"}) {
+    for (const char *field : {"ready", "requested_node_count", "duplicate_update", "changed_name_and_role", "cap_purge",
+                              "resync_presentation_preserved_nodes", "offscreen_update", "all"}) {
         REQUIRE(correctness.HasMember(field));
         CHECK(correctness[field].IsBool());
     }
+    REQUIRE(correctness.HasMember("candidate"));
+    CHECK(correctness["candidate"].IsNull());
 
     std::error_code removeError;
     std::filesystem::remove(outputPath, removeError);
