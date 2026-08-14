@@ -4966,6 +4966,13 @@ void TFTView_320x240::setDeviceMetaData(int hw_model, const char *version, bool 
 {
 }
 
+void TFTView_320x240::addOrUpdateNode(uint32_t nodeNum, uint8_t channel, uint32_t lastHeard, eRole role, bool hasKey,
+                                      bool viaMqtt)
+{
+    MeshtasticView::addOrUpdateNode(nodeNum, channel, lastHeard, role, hasKey, viaMqtt);
+    nodeStore.upsertUnknown(nodeNum, channel, lastHeard, static_cast<uint8_t>(role), hasKey, viaMqtt);
+}
+
 void TFTView_320x240::addOrUpdateNode(uint32_t nodeNum, uint8_t channel, uint32_t lastHeard, const meshtastic_User &cfg)
 {
     nodeStore.upsertUser(nodeNum, channel, lastHeard, cfg, false);

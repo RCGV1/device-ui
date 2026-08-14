@@ -19,6 +19,7 @@ class MuiTestHarness
     void addNodeFixture(uint32_t nodeId, const char *shortName = "TEST", const char *longName = "Test Node",
                         uint32_t lastHeard = 0, uint8_t role = 0, bool hasKey = true, bool unmessagable = false,
                         uint8_t channel = 0);
+    void addUnknownNodeFixture(uint32_t nodeId, uint8_t channel, uint32_t lastHeard, uint8_t role, bool hasKey, bool viaMqtt);
     void updateNodeFixture(uint32_t nodeId, const char *shortName, const char *longName, uint8_t role, bool hasKey,
                            bool unmessagable = false, uint8_t channel = 0);
     void updatePositionFixture(uint32_t nodeId, int32_t latitude, int32_t longitude, int32_t altitude = 0,

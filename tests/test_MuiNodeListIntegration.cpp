@@ -1,4 +1,5 @@
 #include "MuiTestHarness.h"
+#include "graphics/common/MeshtasticView.h"
 #include <doctest/doctest.h>
 
 #ifdef DEVICE_UI_HEADLESS_TEST
@@ -78,5 +79,21 @@ TEST_CASE("node model tracks removals and store purge integrity")
     harness.resetNodeList();
     CHECK(harness.store().size() == 0);
     CHECK(harness.node(0x0001) == nullptr);
+}
+
+TEST_CASE("unknown ingress keeps model identity and MQTT provenance")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    harness.addUnknownNodeFixture(0x1234abcd, 3, 1000, static_cast<uint8_t>(MeshtasticView::unknown), false, true);
+
+    const auto *node = harness.node(0x1234abcd);
+    REQUIRE(node != nullptr);
+    CHECK_FALSE(node->hasUser);
+    CHECK(node->viaMqtt);
+    CHECK(node->channel == 3);
+    CHECK(std::string(node->user.short_name) == "abcd");
+    CHECK(std::string(node->user.long_name) == "Meshtastic abcd");
 }
 #endif

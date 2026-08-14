@@ -57,6 +57,13 @@ void MuiTestHarness::addNodeFixture(uint32_t nodeId, const char *shortName, cons
                   unmessagable);
 }
 
+void MuiTestHarness::addUnknownNodeFixture(uint32_t nodeId, uint8_t channel, uint32_t lastHeard, uint8_t role, bool hasKey,
+                                           bool viaMqtt)
+{
+    static_cast<MeshtasticView *>(view)->addOrUpdateNode(nodeId, channel, lastHeard, static_cast<MeshtasticView::eRole>(role),
+                                                         hasKey, viaMqtt);
+}
+
 void MuiTestHarness::updateNodeFixture(uint32_t nodeId, const char *shortName, const char *longName, uint8_t role, bool hasKey,
                                        bool unmessagable, uint8_t channel)
 {
