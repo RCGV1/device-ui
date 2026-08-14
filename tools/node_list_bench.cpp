@@ -244,6 +244,38 @@ NodeListDurationSummary summarize(std::vector<uint64_t> values)
     return summary;
 }
 
+NodeListAllocatorSnapshot captureAllocatorSnapshot()
+{
+    lv_mem_monitor_t memory{};
+    lv_mem_monitor(&memory);
+    return {memory.free_size, memory.free_biggest_size, memory.used_cnt, memory.frag_pct};
+}
+
+int64_t allocatorDelta(size_t after, size_t before)
+{
+    return after >= before ? static_cast<int64_t>(after - before) : -static_cast<int64_t>(before - after);
+}
+
+NodeListAllocatorDelta allocatorDelta(const NodeListAllocatorSnapshot &before, const NodeListAllocatorSnapshot &after)
+{
+    return {allocatorDelta(after.freeSize, before.freeSize), allocatorDelta(after.biggestFreeBlock, before.biggestFreeBlock),
+            allocatorDelta(after.usedCount, before.usedCount),
+            static_cast<int64_t>(after.fragmentationPercent) - static_cast<int64_t>(before.fragmentationPercent)};
+}
+
+void observeAllocatorSnapshot(NodeListAllocatorSnapshot &peak, const NodeListAllocatorSnapshot &snapshot)
+{
+    peak.freeSize = std::min(peak.freeSize, snapshot.freeSize);
+    peak.biggestFreeBlock = std::min(peak.biggestFreeBlock, snapshot.biggestFreeBlock);
+    peak.usedCount = std::max(peak.usedCount, snapshot.usedCount);
+    peak.fragmentationPercent = std::max(peak.fragmentationPercent, snapshot.fragmentationPercent);
+}
+
+bool allocatorBlockCountIsBounded(const NodeListAllocatorSnapshot &before, const NodeListAllocatorSnapshot &snapshot)
+{
+    return snapshot.usedCount <= before.usedCount;
+}
+
 std::string escapeJson(std::string_view value)
 {
     std::ostringstream output;
@@ -308,6 +340,19 @@ void writeOptionalDuration(std::ostream &output, const std::optional<NodeListDur
     } else {
         output << "null";
     }
+}
+
+void writeAllocatorSnapshot(std::ostream &output, const NodeListAllocatorSnapshot &snapshot)
+{
+    output << "{\"free_size\": " << snapshot.freeSize << ", \"biggest_free_block\": " << snapshot.biggestFreeBlock
+           << ", \"used_count\": " << snapshot.usedCount
+           << ", \"fragmentation_percent\": " << static_cast<unsigned>(snapshot.fragmentationPercent) << '}';
+}
+
+void writeAllocatorDelta(std::ostream &output, const NodeListAllocatorDelta &delta)
+{
+    output << "{\"free_size\": " << delta.freeSize << ", \"biggest_free_block\": " << delta.biggestFreeBlock
+           << ", \"used_count\": " << delta.usedCount << ", \"fragmentation_percent\": " << delta.fragmentationPercent << '}';
 }
 
 bool parseUnsigned(std::string_view value, uint64_t &parsed)
@@ -405,10 +450,22 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
     bool offscreenUpdateOk = true;
     bool poolBoundedOk = list->boundRowCount() == VirtualNodeList::POOL_SIZE;
     bool objectCountStableOk = true;
+    bool allocatorChurnBoundedOk = true;
     bool presentationOk = true;
+    NodeListCandidateAllocatorTelemetry allocatorTelemetry;
+    allocatorTelemetry.meaning =
+        "LVGL allocator snapshots captured after the virtual row pool is created. Each trial records its before and after "
+        "snapshots plus every post-sync snapshot. Peak reports the worst observed values in that trial: minimum free_size "
+        "and biggest_free_block, maximum used_count and fragmentation_percent. allocator_churn_bounded is true only "
+        "when no post-sync or after snapshot has more used allocation blocks than that trial's before snapshot.";
 
     const size_t iterations = options.warmup + options.trials;
     for (size_t iteration = 0; iteration < iterations; ++iteration) {
+        NodeListCandidateAllocatorTelemetry::Trial allocatorTrial;
+        allocatorTrial.iteration = iteration;
+        allocatorTrial.warmup = iteration < options.warmup;
+        allocatorTrial.before = captureAllocatorSnapshot();
+        allocatorTrial.peak = allocatorTrial.before;
         auto fixtures = makeFixtures(options.nodes, options.seed, iteration);
         harness.setCurrentTime(1700000000U);
         NodeStore store;
@@ -421,6 +478,10 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
             harness.pump();
             objectCountStableOk = objectCountStableOk && harness.objectCount() == pooledObjectCount &&
                                   harness.nodeListObjectCount() == pooledNodeListObjectCount;
+            const auto snapshot = captureAllocatorSnapshot();
+            allocatorTrial.syncSnapshots.push_back(snapshot);
+            observeAllocatorSnapshot(allocatorTrial.peak, snapshot);
+            allocatorChurnBoundedOk = allocatorChurnBoundedOk && allocatorBlockCountIsBounded(allocatorTrial.before, snapshot);
         };
         auto ordered = fixtures;
         std::sort(ordered.begin(), ordered.end(),
@@ -512,6 +573,12 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
             }
         }
         nodeCountOk = nodeCountOk && store.size() == options.nodes && index.ids().size() == options.nodes;
+        allocatorTrial.after = captureAllocatorSnapshot();
+        allocatorTrial.delta = allocatorDelta(allocatorTrial.before, allocatorTrial.after);
+        observeAllocatorSnapshot(allocatorTrial.peak, allocatorTrial.after);
+        allocatorChurnBoundedOk =
+            allocatorChurnBoundedOk && allocatorBlockCountIsBounded(allocatorTrial.before, allocatorTrial.after);
+        allocatorTelemetry.trials.push_back(std::move(allocatorTrial));
 
         if (iteration >= options.warmup) {
             insertSamples.push_back(insertNs);
@@ -525,6 +592,7 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
     report.timing.updateNs = summarize(std::move(updateSamples));
     report.timing.reorderInsertNs = summarize(std::move(reorderSamples));
     report.timing.virtualRefreshNs = summarize(std::move(virtualRefreshSamples));
+    report.allocatorTelemetry = std::move(allocatorTelemetry);
     report.lvgl.totalObjects = harness.objectCount();
     report.lvgl.nodeListObjects = harness.nodeListObjectCount();
 
@@ -546,12 +614,13 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
     report.correctness.capPurge = capPurgeOk;
     report.correctness.resyncPresentationPreservedNodes = resyncPresentationOk;
     report.correctness.offscreenUpdate = offscreenUpdateOk;
-    report.correctness.candidate = {poolBoundedOk, objectCountStableOk, presentationOk};
+    report.correctness.candidate = {poolBoundedOk, objectCountStableOk, allocatorChurnBoundedOk, presentationOk};
     report.correctness.all = report.correctness.ready && report.correctness.requestedNodeCount &&
                              report.correctness.duplicateUpdate && report.correctness.changedNameAndRole &&
                              report.correctness.capPurge && report.correctness.resyncPresentationPreservedNodes &&
                              report.correctness.offscreenUpdate && report.correctness.candidate->poolBounded &&
-                             report.correctness.candidate->objectCountStable && report.correctness.candidate->presentation &&
+                             report.correctness.candidate->objectCountStable &&
+                             report.correctness.candidate->allocatorChurnBounded && report.correctness.candidate->presentation &&
                              report.memory.integrityOk;
     list.reset();
     lv_obj_delete(container);
@@ -771,6 +840,33 @@ bool writeNodeListBenchmarkJson(const NodeListBenchmarkReport &report, const std
            << ", \"used_percent\": " << static_cast<unsigned>(report.memory.usedPercent)
            << ", \"fragmentation_percent\": " << static_cast<unsigned>(report.memory.fragmentationPercent)
            << ", \"integrity_ok\": " << (report.memory.integrityOk ? "true" : "false") << "},\n"
+           << "  \"allocator_telemetry\": ";
+    if (report.allocatorTelemetry.has_value()) {
+        const auto &telemetry = report.allocatorTelemetry.value();
+        output << "{\"meaning\": \"" << escapeJson(telemetry.meaning) << "\", \"trials\": [\n";
+        for (size_t i = 0; i < telemetry.trials.size(); ++i) {
+            const auto &trial = telemetry.trials[i];
+            output << "    {\"iteration\": " << trial.iteration << ", \"warmup\": " << (trial.warmup ? "true" : "false")
+                   << ", \"before\": ";
+            writeAllocatorSnapshot(output, trial.before);
+            output << ", \"sync_snapshots\": [";
+            for (size_t syncIndex = 0; syncIndex < trial.syncSnapshots.size(); ++syncIndex) {
+                output << (syncIndex == 0 ? "" : ", ");
+                writeAllocatorSnapshot(output, trial.syncSnapshots[syncIndex]);
+            }
+            output << "], \"after\": ";
+            writeAllocatorSnapshot(output, trial.after);
+            output << ", \"delta\": ";
+            writeAllocatorDelta(output, trial.delta);
+            output << ", \"peak\": ";
+            writeAllocatorSnapshot(output, trial.peak);
+            output << '}' << (i + 1 == telemetry.trials.size() ? "\n" : ",\n");
+        }
+        output << "  ]}";
+    } else {
+        output << "null";
+    }
+    output << ",\n"
            << "  \"timing\": {\n    \"insert_ns\": ";
     writeDuration(output, report.timing.insertNs, 4);
     output << ",\n    \"update_ns\": ";
@@ -794,6 +890,7 @@ bool writeNodeListBenchmarkJson(const NodeListBenchmarkReport &report, const std
         const auto &candidate = report.correctness.candidate.value();
         output << "{\"pool_bounded\": " << (candidate.poolBounded ? "true" : "false")
                << ", \"object_count_stable\": " << (candidate.objectCountStable ? "true" : "false")
+               << ", \"allocator_churn_bounded\": " << (candidate.allocatorChurnBounded ? "true" : "false")
                << ", \"presentation\": " << (candidate.presentation ? "true" : "false") << '}';
     } else {
         output << "null";

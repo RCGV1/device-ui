@@ -26,6 +26,35 @@ struct NodeListDurationSummary {
     uint64_t maximum = 0;
 };
 
+struct NodeListAllocatorSnapshot {
+    size_t freeSize = 0;
+    size_t biggestFreeBlock = 0;
+    size_t usedCount = 0;
+    uint8_t fragmentationPercent = 0;
+};
+
+struct NodeListAllocatorDelta {
+    int64_t freeSize = 0;
+    int64_t biggestFreeBlock = 0;
+    int64_t usedCount = 0;
+    int64_t fragmentationPercent = 0;
+};
+
+struct NodeListCandidateAllocatorTelemetry {
+    struct Trial {
+        size_t iteration = 0;
+        bool warmup = false;
+        NodeListAllocatorSnapshot before;
+        std::vector<NodeListAllocatorSnapshot> syncSnapshots;
+        NodeListAllocatorSnapshot after;
+        NodeListAllocatorDelta delta;
+        NodeListAllocatorSnapshot peak;
+    };
+
+    std::string meaning;
+    std::vector<Trial> trials;
+};
+
 struct NodeListBenchmarkReport {
     struct UnsupportedFixture {
         std::string name;
@@ -60,6 +89,7 @@ struct NodeListBenchmarkReport {
         uint8_t fragmentationPercent = 0;
         bool integrityOk = false;
     } memory;
+    std::optional<NodeListCandidateAllocatorTelemetry> allocatorTelemetry;
     struct {
         size_t nodes = 0;
         size_t trials = 0;
@@ -88,6 +118,7 @@ struct NodeListBenchmarkReport {
         struct Candidate {
             bool poolBounded = false;
             bool objectCountStable = false;
+            bool allocatorChurnBounded = false;
             bool presentation = false;
         };
         std::optional<Candidate> candidate;

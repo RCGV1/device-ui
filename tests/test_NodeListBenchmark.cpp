@@ -1,5 +1,6 @@
 #include "NodeListBenchmark.h"
 #include "libs/thorvg/rapidjson/document.h"
+#include <algorithm>
 #include <doctest/doctest.h>
 #include <filesystem>
 #include <fstream>
@@ -91,7 +92,7 @@ TEST_CASE("benchmark CLI selects the virtual candidate explicitly")
     CHECK(jsonPath == "/tmp/node-list-virtual-candidate.json");
 }
 
-TEST_CASE("virtual candidate benchmark uses a bounded real LVGL node-list pool")
+TEST_CASE("virtual candidate benchmark reports allocator churn from real LVGL node-list syncs")
 {
     NodeListBenchmarkOptions options{25, 1, 42, 0, NodeListBenchmarkImplementation::VirtualCandidate};
     const auto report = runNodeListBenchmark(options);
@@ -100,10 +101,26 @@ TEST_CASE("virtual candidate benchmark uses a bounded real LVGL node-list pool")
     CHECK(report.lvgl.totalObjects > 0);
     CHECK(report.lvgl.nodeListObjects > 0);
     REQUIRE(report.correctness.candidate.has_value());
+    REQUIRE(report.allocatorTelemetry.has_value());
+    REQUIRE_FALSE(report.allocatorTelemetry->trials.empty());
     CHECK(report.correctness.candidate->poolBounded);
     CHECK(report.correctness.candidate->objectCountStable);
     CHECK(report.correctness.candidate->presentation);
-    CHECK(report.correctness.all);
+
+    bool allocatorBlockCountStayedBounded = true;
+    for (const auto &trial : report.allocatorTelemetry->trials) {
+        allocatorBlockCountStayedBounded = allocatorBlockCountStayedBounded && trial.after.usedCount <= trial.before.usedCount;
+        for (const auto &snapshot : trial.syncSnapshots) {
+            allocatorBlockCountStayedBounded = allocatorBlockCountStayedBounded && snapshot.usedCount <= trial.before.usedCount;
+        }
+    }
+    CHECK(report.correctness.candidate->allocatorChurnBounded == allocatorBlockCountStayedBounded);
+    CHECK(report.correctness.all ==
+          (report.correctness.ready && report.correctness.requestedNodeCount && report.correctness.duplicateUpdate &&
+           report.correctness.changedNameAndRole && report.correctness.capPurge &&
+           report.correctness.resyncPresentationPreservedNodes && report.correctness.offscreenUpdate &&
+           report.correctness.candidate->poolBounded && report.correctness.candidate->objectCountStable &&
+           allocatorBlockCountStayedBounded && report.correctness.candidate->presentation && report.memory.integrityOk));
 }
 
 TEST_CASE("virtual candidate JSON identifies candidate-only structural checks")
@@ -133,6 +150,80 @@ TEST_CASE("virtual candidate JSON identifies candidate-only structural checks")
         CHECK(candidate[field].IsBool());
         CHECK(candidate[field].GetBool());
     }
+    REQUIRE(candidate.HasMember("allocator_churn_bounded"));
+    CHECK(candidate["allocator_churn_bounded"].IsBool());
+    REQUIRE(document.HasMember("allocator_telemetry"));
+    const auto &allocatorTelemetry = document["allocator_telemetry"];
+    REQUIRE(allocatorTelemetry.IsObject());
+    REQUIRE(allocatorTelemetry.HasMember("meaning"));
+    CHECK(allocatorTelemetry["meaning"].IsString());
+    REQUIRE(allocatorTelemetry.HasMember("trials"));
+    REQUIRE(allocatorTelemetry["trials"].IsArray());
+    REQUIRE(allocatorTelemetry["trials"].Size() == 1);
+    const auto &trial = allocatorTelemetry["trials"][0];
+    REQUIRE(trial.IsObject());
+    for (const char *section : {"before", "after", "peak"}) {
+        REQUIRE(trial.HasMember(section));
+        REQUIRE(trial[section].IsObject());
+        for (const char *field : {"free_size", "biggest_free_block", "used_count", "fragmentation_percent"}) {
+            REQUIRE(trial[section].HasMember(field));
+            CHECK(trial[section][field].IsUint64());
+        }
+    }
+    REQUIRE(trial.HasMember("delta"));
+    REQUIRE(trial["delta"].IsObject());
+    for (const char *field : {"free_size", "biggest_free_block", "used_count", "fragmentation_percent"}) {
+        REQUIRE(trial["delta"].HasMember(field));
+        CHECK(trial["delta"][field].IsInt64());
+    }
+    REQUIRE(trial.HasMember("sync_snapshots"));
+    REQUIRE(trial["sync_snapshots"].IsArray());
+    REQUIRE(trial["sync_snapshots"].Size() > 0);
+    REQUIRE(trial.HasMember("iteration"));
+    CHECK(trial["iteration"].IsUint64());
+    REQUIRE(trial.HasMember("warmup"));
+    CHECK(trial["warmup"].IsBool());
+
+    const auto &before = trial["before"];
+    const auto &after = trial["after"];
+    const auto &delta = trial["delta"];
+    const auto expectedDelta = [](uint64_t beforeValue, uint64_t afterValue) {
+        return afterValue >= beforeValue ? static_cast<int64_t>(afterValue - beforeValue)
+                                         : -static_cast<int64_t>(beforeValue - afterValue);
+    };
+    CHECK(delta["free_size"].GetInt64() == expectedDelta(before["free_size"].GetUint64(), after["free_size"].GetUint64()));
+    CHECK(delta["biggest_free_block"].GetInt64() ==
+          expectedDelta(before["biggest_free_block"].GetUint64(), after["biggest_free_block"].GetUint64()));
+    CHECK(delta["used_count"].GetInt64() == expectedDelta(before["used_count"].GetUint64(), after["used_count"].GetUint64()));
+    CHECK(delta["fragmentation_percent"].GetInt64() ==
+          expectedDelta(before["fragmentation_percent"].GetUint64(), after["fragmentation_percent"].GetUint64()));
+
+    bool usedBlockCountStayedBounded = after["used_count"].GetUint64() <= before["used_count"].GetUint64();
+    uint64_t minimumFreeSize = before["free_size"].GetUint64();
+    uint64_t minimumBiggestBlock = before["biggest_free_block"].GetUint64();
+    uint64_t maximumUsedCount = before["used_count"].GetUint64();
+    uint64_t maximumFragmentation = before["fragmentation_percent"].GetUint64();
+    for (const auto &snapshot : trial["sync_snapshots"].GetArray()) {
+        REQUIRE(snapshot.IsObject());
+        REQUIRE(snapshot.HasMember("used_count"));
+        REQUIRE(snapshot["used_count"].IsUint64());
+        minimumFreeSize = std::min(minimumFreeSize, snapshot["free_size"].GetUint64());
+        minimumBiggestBlock = std::min(minimumBiggestBlock, snapshot["biggest_free_block"].GetUint64());
+        maximumUsedCount = std::max(maximumUsedCount, snapshot["used_count"].GetUint64());
+        maximumFragmentation = std::max(maximumFragmentation, snapshot["fragmentation_percent"].GetUint64());
+        usedBlockCountStayedBounded =
+            usedBlockCountStayedBounded && snapshot["used_count"].GetUint64() <= before["used_count"].GetUint64();
+    }
+    minimumFreeSize = std::min(minimumFreeSize, after["free_size"].GetUint64());
+    minimumBiggestBlock = std::min(minimumBiggestBlock, after["biggest_free_block"].GetUint64());
+    maximumUsedCount = std::max(maximumUsedCount, after["used_count"].GetUint64());
+    maximumFragmentation = std::max(maximumFragmentation, after["fragmentation_percent"].GetUint64());
+    const auto &peak = trial["peak"];
+    CHECK(peak["free_size"].GetUint64() == minimumFreeSize);
+    CHECK(peak["biggest_free_block"].GetUint64() == minimumBiggestBlock);
+    CHECK(peak["used_count"].GetUint64() == maximumUsedCount);
+    CHECK(peak["fragmentation_percent"].GetUint64() == maximumFragmentation);
+    CHECK(candidate["allocator_churn_bounded"].GetBool() == usedBlockCountStayedBounded);
 
     std::error_code removeError;
     std::filesystem::remove(outputPath, removeError);
@@ -238,6 +329,9 @@ TEST_CASE("benchmark JSON output is valid and contains the documented sections")
     }
     REQUIRE(memory.HasMember("integrity_ok"));
     CHECK(memory["integrity_ok"].IsBool());
+
+    REQUIRE(document.HasMember("allocator_telemetry"));
+    CHECK(document["allocator_telemetry"].IsNull());
 
     REQUIRE(document.HasMember("timing"));
     const auto &timing = document["timing"];
