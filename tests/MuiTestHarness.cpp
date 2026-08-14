@@ -108,6 +108,11 @@ void MuiTestHarness::updateHopsFixture(uint32_t nodeId, uint8_t hops)
     view->updateHopsAway(nodeId, hops);
 }
 
+void MuiTestHarness::updateLastHeardFixture(uint32_t nodeId)
+{
+    view->updateLastHeardForTesting(nodeId);
+}
+
 void MuiTestHarness::addActiveChatFixture(uint32_t nodeId, uint8_t channel)
 {
     uint32_t messageTime = 1700000000;

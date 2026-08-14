@@ -28,6 +28,7 @@ class MuiTestHarness
     void updateMetricsFixture(uint32_t nodeId, uint32_t batteryLevel, float voltage, float channelUtilization,
                               float airUtilization);
     void updateHopsFixture(uint32_t nodeId, uint8_t hops);
+    void updateLastHeardFixture(uint32_t nodeId);
     void addActiveChatFixture(uint32_t nodeId, uint8_t channel = 0);
     void toggleResyncPresentationFixture();
     void scanNodeFilters();

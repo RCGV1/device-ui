@@ -96,4 +96,18 @@ TEST_CASE("unknown ingress keeps model identity and MQTT provenance")
     CHECK(std::string(node->user.short_name) == "abcd");
     CHECK(std::string(node->user.long_name) == "Meshtastic abcd");
 }
+
+TEST_CASE("last-heard updates keep the model in sync with the node row")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.addNodeFixture(0x12345678, "ALPH", "Alpha Node", 100);
+    harness.setCurrentTime(900);
+
+    harness.updateLastHeardFixture(0x12345678);
+
+    const auto *node = harness.node(0x12345678);
+    REQUIRE(node != nullptr);
+    CHECK(node->lastHeard == 900);
+}
 #endif

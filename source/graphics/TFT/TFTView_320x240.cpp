@@ -200,6 +200,11 @@ void TFTView_320x240::updateNodesFilteredForTesting(bool reset)
     updateNodesFiltered(reset);
 }
 
+void TFTView_320x240::updateLastHeardForTesting(uint32_t nodeNum)
+{
+    updateLastHeard(nodeNum);
+}
+
 void TFTView_320x240::setCurrentTimeForTesting(time_t value)
 {
     curtime = value;
@@ -7342,6 +7347,7 @@ void TFTView_320x240::updateNodesFiltered(bool reset)
  */
 void TFTView_320x240::updateLastHeard(uint32_t nodeNum)
 {
+    nodeStore.updateLastHeard(nodeNum, curtime);
     auto it = nodes.find(nodeNum);
     if (it != nodes.end() && it->second) {
         time_t lastHeard = (time_t)it->second->LV_OBJ_IDX(node_lh_idx)->user_data;
