@@ -180,8 +180,21 @@ if(ENABLE_MUI_HEADLESS_TESTS)
         DEVICE_UI_SOURCE_DIRTY=${DEVICE_UI_GIT_DIRTY}
     )
 
+    add_library(NodeListVideo STATIC tools/node_list_video_options.cpp)
+    target_include_directories(NodeListVideo PRIVATE ${NODE_LIST_BENCHMARK_INCLUDES})
+
     add_executable(node_list_bench
         tools/node_list_bench.cpp
+        tests/HeadlessDisplayDriver.cpp
+        tests/HeadlessDisplayDriverFactory.cpp
+        tests/HeadlessLinuxHardwareI2C.cpp
+        tests/HeadlessPlatform.cpp
+        tests/MuiTestHarness.cpp
+    )
+
+    add_executable(node_list_video
+        tools/node_list_video.cpp
+        tools/node_list_video_options.cpp
         tests/HeadlessDisplayDriver.cpp
         tests/HeadlessDisplayDriverFactory.cpp
         tests/HeadlessLinuxHardwareI2C.cpp
@@ -196,13 +209,18 @@ if(ENABLE_MUI_HEADLESS_TESTS)
         DEVICE_UI_SOURCE_REVISION="${DEVICE_UI_GIT_REVISION}"
         DEVICE_UI_SOURCE_DIRTY=${DEVICE_UI_GIT_DIRTY}
     )
+    target_include_directories(node_list_video PRIVATE ${NODE_LIST_BENCHMARK_INCLUDES})
+    target_link_libraries(node_list_video PRIVATE ${NODE_LIST_BENCHMARK_LIBRARIES})
+    target_compile_definitions(node_list_video PRIVATE UNIT_TEST)
     if(APPLE)
         foreach(PORTDUINO_INCLUDE_DIR IN LISTS PORTDUINO_INCLUDE_DIRS)
             target_compile_options(NodeListBenchmark PRIVATE "-idirafter${PORTDUINO_INCLUDE_DIR}")
             target_compile_options(node_list_bench PRIVATE "-idirafter${PORTDUINO_INCLUDE_DIR}")
+            target_compile_options(node_list_video PRIVATE "-idirafter${PORTDUINO_INCLUDE_DIR}")
         endforeach()
     endif()
     set_target_properties(node_list_bench PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+    set_target_properties(node_list_video PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 endif()
 
 # Handle Windows Static linking dependencies if applicable
@@ -246,7 +264,7 @@ if(ENABLE_DOCTESTS)
     add_executable(tests ${sources_test})
     target_link_libraries(tests PRIVATE DeviceUI doctest::doctest lvgl::lvgl LovyanGFX Portduino Protobufs)
     if(ENABLE_MUI_HEADLESS_TESTS)
-        target_link_libraries(tests PRIVATE PNGdec protobuf-nanopb-static NodeListBenchmark)
+        target_link_libraries(tests PRIVATE PNGdec protobuf-nanopb-static NodeListBenchmark NodeListVideo)
         target_compile_definitions(tests PRIVATE UNIT_TEST)
         if(APPLE)
             foreach(PORTDUINO_INCLUDE_DIR IN LISTS PORTDUINO_INCLUDE_DIRS)

@@ -185,6 +185,11 @@ lv_obj_t *MuiTestHarness::nodeListRootForTesting() const
     return view->nodeListRootForTesting();
 }
 
+HeadlessDisplayDriver *MuiTestHarness::displayDriverForTesting() const
+{
+    return driver;
+}
+
 size_t MuiTestHarness::countObjects(const lv_obj_t *root)
 {
     if (!root) {
