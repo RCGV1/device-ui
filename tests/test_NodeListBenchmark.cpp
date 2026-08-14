@@ -25,7 +25,9 @@ TEST_CASE("baseline benchmark emits list diagnostics")
     CHECK(report.timing.insertNs.median > 0);
     CHECK(report.timing.updateNs.median > 0);
     CHECK(report.timing.reorderInsertNs.median > 0);
-    CHECK(report.timing.filterNs.median > 0);
+    REQUIRE(report.timing.filterNs.has_value());
+    CHECK(report.timing.filterNs->median > 0);
+    CHECK_FALSE(report.timing.virtualRefreshNs.has_value());
     REQUIRE(report.fixtures.unsupported.size() == 1);
     CHECK(report.fixtures.unsupported.front().name == "MQTT");
     CHECK(report.correctness.ready);
@@ -120,7 +122,9 @@ TEST_CASE("virtual candidate JSON identifies candidate-only structural checks")
     REQUIRE_FALSE(document.HasParseError());
     REQUIRE(document["implementation"]["name"].IsString());
     CHECK(std::string(document["implementation"]["name"].GetString()) == "virtual_candidate");
-    REQUIRE(document["timing"].HasMember("visible_index_rebuild_ns"));
+    REQUIRE(document["timing"].HasMember("virtual_refresh_ns"));
+    REQUIRE(document["timing"]["virtual_refresh_ns"].IsObject());
+    CHECK(document["timing"]["filter_ns"].IsNull());
     REQUIRE(document["correctness"].HasMember("candidate"));
     const auto &candidate = document["correctness"]["candidate"];
     REQUIRE(candidate.IsObject());
@@ -238,7 +242,7 @@ TEST_CASE("benchmark JSON output is valid and contains the documented sections")
     REQUIRE(document.HasMember("timing"));
     const auto &timing = document["timing"];
     REQUIRE(timing.IsObject());
-    for (const char *operation : {"insert_ns", "update_ns", "reorder_insert_ns", "filter_ns", "visible_index_rebuild_ns"}) {
+    for (const char *operation : {"insert_ns", "update_ns", "reorder_insert_ns", "filter_ns"}) {
         REQUIRE(timing.HasMember(operation));
         const auto &entry = timing[operation];
         REQUIRE(entry.IsObject());
@@ -254,6 +258,8 @@ TEST_CASE("benchmark JSON output is valid and contains the documented sections")
             CHECK(entry[summary].IsUint64());
         }
     }
+    REQUIRE(timing.HasMember("virtual_refresh_ns"));
+    CHECK(timing["virtual_refresh_ns"].IsNull());
 
     REQUIRE(document.HasMember("correctness"));
     const auto &correctness = document["correctness"];

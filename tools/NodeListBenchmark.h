@@ -74,8 +74,8 @@ struct NodeListBenchmarkReport {
         NodeListDurationSummary insertNs;
         NodeListDurationSummary updateNs;
         NodeListDurationSummary reorderInsertNs;
-        NodeListDurationSummary filterNs;
-        NodeListDurationSummary visibleIndexRebuildNs;
+        std::optional<NodeListDurationSummary> filterNs;
+        std::optional<NodeListDurationSummary> virtualRefreshNs;
     } timing;
     struct {
         bool ready = false;

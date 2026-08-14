@@ -301,6 +301,15 @@ void writeDuration(std::ostream &output, const NodeListDurationSummary &summary,
            << padding << '}';
 }
 
+void writeOptionalDuration(std::ostream &output, const std::optional<NodeListDurationSummary> &summary, size_t indent)
+{
+    if (summary.has_value()) {
+        writeDuration(output, summary.value(), indent);
+    } else {
+        output << "null";
+    }
+}
+
 bool parseUnsigned(std::string_view value, uint64_t &parsed)
 {
     if (value.empty()) {
@@ -387,7 +396,7 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
     std::vector<uint64_t> insertSamples;
     std::vector<uint64_t> updateSamples;
     std::vector<uint64_t> reorderSamples;
-    std::vector<uint64_t> filterSamples;
+    std::vector<uint64_t> virtualRefreshSamples;
     bool nodeCountOk = true;
     bool duplicateUpdateOk = true;
     bool changedNameAndRoleOk = true;
@@ -477,7 +486,7 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
                                std::strcmp(changedRecord->user.long_name, "Duplicate Final") == 0 &&
                                changedRecord->user.role == meshtastic_Config_DeviceConfig_Role_ROUTER;
 
-        const uint64_t visibleIndexRebuildNs = measureNs([&] { sync(); });
+        const uint64_t virtualRefreshNs = measureNs([&] { sync(); });
         list->scrollTo(changed.id, LV_ANIM_OFF);
         harness.pump();
         presentationOk = presentationOk && hasPresentedNode(container, changed.id, "Duplicate Final");
@@ -508,14 +517,14 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
             insertSamples.push_back(insertNs);
             updateSamples.push_back(updateNs);
             reorderSamples.push_back(reorderNs);
-            filterSamples.push_back(visibleIndexRebuildNs);
+            virtualRefreshSamples.push_back(virtualRefreshNs);
         }
     }
 
     report.timing.insertNs = summarize(std::move(insertSamples));
     report.timing.updateNs = summarize(std::move(updateSamples));
     report.timing.reorderInsertNs = summarize(std::move(reorderSamples));
-    report.timing.visibleIndexRebuildNs = summarize(std::move(filterSamples));
+    report.timing.virtualRefreshNs = summarize(std::move(virtualRefreshSamples));
     report.lvgl.totalObjects = harness.objectCount();
     report.lvgl.nodeListObjects = harness.nodeListObjectCount();
 
@@ -769,9 +778,9 @@ bool writeNodeListBenchmarkJson(const NodeListBenchmarkReport &report, const std
     output << ",\n    \"reorder_insert_ns\": ";
     writeDuration(output, report.timing.reorderInsertNs, 4);
     output << ",\n    \"filter_ns\": ";
-    writeDuration(output, report.timing.filterNs, 4);
-    output << ",\n    \"visible_index_rebuild_ns\": ";
-    writeDuration(output, report.timing.visibleIndexRebuildNs, 4);
+    writeOptionalDuration(output, report.timing.filterNs, 4);
+    output << ",\n    \"virtual_refresh_ns\": ";
+    writeOptionalDuration(output, report.timing.virtualRefreshNs, 4);
     output << "\n  },\n"
            << "  \"correctness\": {\"ready\": " << (report.correctness.ready ? "true" : "false")
            << ", \"requested_node_count\": " << (report.correctness.requestedNodeCount ? "true" : "false")
