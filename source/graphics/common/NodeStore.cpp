@@ -269,8 +269,10 @@ NodeId NodeStore::selectPurgeCandidate(NodeId incoming, NodeId ownNode, uint32_t
         const uint32_t rightHeard = effectiveLastHeard(*right, now);
         if (leftHeard != rightHeard)
             return leftHeard < rightHeard;
+        if (left->recencyPromoted != right->recencyPromoted)
+            return !left->recencyPromoted;
         if (left->recencyOrder != right->recencyOrder)
-            return left->recencyOrder < right->recencyOrder;
+            return left->recencyPromoted ? left->recencyOrder < right->recencyOrder : left->recencyOrder > right->recencyOrder;
         return left->id < right->id;
     });
 

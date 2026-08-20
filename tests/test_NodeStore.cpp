@@ -200,6 +200,35 @@ TEST_CASE("node store purge candidate falls back to the oldest removable node")
     CHECK(store.selectPurgeCandidate(0x99, 0x01, now) == 0x10);
 }
 
+TEST_CASE("node store purge candidate keeps retained legacy same-timestamp ordering and protection")
+{
+    constexpr uint32_t now = 1000;
+    NodeStore store;
+
+    store.upsertUnknown(0x30000000, 0, 900, static_cast<uint8_t>(unknownRole), false, false);
+    store.upsertUnknown(0x10000000, 0, 900, static_cast<uint8_t>(unknownRole), false, false);
+    store.upsertUnknown(0x20000000, 0, 900, static_cast<uint8_t>(unknownRole), false, false);
+
+    CHECK(store.selectPurgeCandidate(0x40000000, 0, now) == 0x20000000);
+
+    store.setActiveChat(0x20000000, true);
+    CHECK(store.selectPurgeCandidate(0x40000000, 0, now) == 0x10000000);
+}
+
+TEST_CASE("node store purge candidate limits stale-unknown preference to the oldest population")
+{
+    constexpr uint32_t now = 1000;
+    NodeStore store;
+
+    store.upsertUser(0x10000000, 0, 100, makeUser("OLD", "Old Named"), false);
+    store.upsertUser(0x20000000, 0, 200, makeUser("MID", "Middle Named"), false);
+    store.upsertUser(0x30000000, 0, 300, makeUser("NEW", "New Named"), false);
+    store.upsertUser(0x40000000, 0, 400, makeUser("NWR", "Newer Named"), false);
+    store.upsertUnknown(0x50000000, 0, 800, static_cast<uint8_t>(unknownRole), false, false);
+
+    CHECK(store.selectPurgeCandidate(0x60000000, 0, now) == 0x10000000);
+}
+
 TEST_CASE("node store purge candidate returns zero when every node is protected")
 {
     constexpr uint32_t now = 100000;

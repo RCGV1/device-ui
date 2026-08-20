@@ -132,7 +132,9 @@ class TFTView_320x240 : public MeshtasticView
     void selectNodeForTesting(NodeId id);
     void scanSignalForTesting(uint32_t scanNo);
     void showTraceRouteForTesting();
+    void showSignalScannerForTesting();
     void startTraceRouteForTesting();
+    void dispatchTraceRouteResultForTesting(NodeId id);
     void dispatchTraceRouteNodeCallbackForTesting(NodeId id);
     void dispatchMapNodeCallbackForTesting(NodeId id);
     void dispatchChatNodeCallbackForTesting(NodeId id);
@@ -146,6 +148,13 @@ class TFTView_320x240 : public MeshtasticView
     bool messagesPanelVisibleForTesting() const;
     bool mapPanelVisibleForTesting() const;
     uintptr_t topMessagesNodeImageSrcForTesting() const;
+    const char *firstTraceRouteTowardsLabelForTesting() const;
+    uintptr_t firstTraceRouteTowardsImageSrcForTesting() const;
+    void clickFirstTraceRouteTowardsButtonForTesting();
+    const char *signalScannerTargetLabelForTesting() const;
+    uintptr_t signalScannerTargetImageSrcForTesting() const;
+    const char *traceRouteTargetLabelForTesting() const;
+    uintptr_t traceRouteTargetImageSrcForTesting() const;
     void sendActiveTextForTesting(char *msg);
     void focusVirtualNodeForTesting(NodeId id);
     void scrollVirtualNodeForTesting(NodeId id);

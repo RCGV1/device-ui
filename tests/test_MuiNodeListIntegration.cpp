@@ -571,17 +571,45 @@ TEST_CASE("gated virtual node list preserves legacy same-second insertion and up
     CHECK(renderedVirtualNodeAt(harness, 0) == 0x30000000);
     CHECK(renderedVirtualNodeAt(harness, 1) == 0x10000000);
     CHECK(renderedVirtualNodeAt(harness, 2) == 0x20000000);
-    CHECK(harness.nodePurgeCandidate(0x50000000) == 0x30000000);
+    CHECK(harness.nodePurgeCandidate(0x50000000) == 0x20000000);
 
-    harness.updateLastHeardFixture(0x20000000);
-    CHECK(renderedVirtualNodeAt(harness, 0) == 0x20000000);
-    CHECK(harness.nodePurgeCandidate(0x50000000) == 0x30000000);
+    harness.updateLastHeardFixture(0x10000000);
+    CHECK(renderedVirtualNodeAt(harness, 0) == 0x10000000);
+    CHECK(harness.nodePurgeCandidate(0x50000000) == 0x20000000);
 
     harness.addNodeFixture(0x40000000, "FUT", "Future Clamped", 5000U);
-    CHECK(renderedVirtualNodeAt(harness, 0) == 0x20000000);
+    CHECK(renderedVirtualNodeAt(harness, 0) == 0x10000000);
     REQUIRE(harness.node(0x40000000) != nullptr);
     CHECK(harness.node(0x40000000)->lastHeard == 1000U);
-    CHECK(harness.nodePurgeCandidate(0x50000000) == 0x30000000);
+    CHECK(harness.nodePurgeCandidate(0x50000000) == 0x40000000);
+}
+
+TEST_CASE("gated virtual purge selection matches retained legacy equal-timestamp protection")
+{
+    NodeId retainedLegacyCandidate = 0;
+    {
+        MuiTestHarness harness;
+        harness.resetNodeList();
+        harness.enableVirtualNodeModelFixture();
+        harness.setCurrentTime(1000U);
+        harness.addUnknownNodeFixture(0x30000000U, 0, 900U, static_cast<uint8_t>(MeshtasticView::unknown), false, false);
+        harness.addUnknownNodeFixture(0x10000000U, 0, 900U, static_cast<uint8_t>(MeshtasticView::unknown), false, false);
+        harness.addUnknownNodeFixture(0x20000000U, 0, 900U, static_cast<uint8_t>(MeshtasticView::unknown), false, false);
+        harness.addActiveChatFixture(0x20000000U);
+        retainedLegacyCandidate = harness.nodePurgeCandidate(0x40000000U);
+        CHECK(retainedLegacyCandidate == 0x10000000U);
+    }
+
+    MuiTestHarness virtualHarness;
+    virtualHarness.resetNodeList();
+    virtualHarness.enableVirtualNodeListFixture();
+    virtualHarness.setCurrentTime(1000U);
+    virtualHarness.addUnknownNodeFixture(0x30000000U, 0, 900U, static_cast<uint8_t>(MeshtasticView::unknown), false, false);
+    virtualHarness.addUnknownNodeFixture(0x10000000U, 0, 900U, static_cast<uint8_t>(MeshtasticView::unknown), false, false);
+    virtualHarness.addUnknownNodeFixture(0x20000000U, 0, 900U, static_cast<uint8_t>(MeshtasticView::unknown), false, false);
+    virtualHarness.addActiveChatFixture(0x20000000U);
+
+    CHECK(virtualHarness.nodePurgeCandidate(0x40000000U) == retainedLegacyCandidate);
 }
 
 TEST_CASE("gated virtual node list keeps selection stable across recycling, filters, and purge")

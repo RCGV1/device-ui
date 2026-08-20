@@ -117,7 +117,9 @@ class MuiTestHarness
     void selectNode(uint32_t nodeId);
     void scanSignal(uint32_t scanNo = 0);
     void showTraceRoute();
+    void showSignalScanner();
     void startTraceRoute();
+    void dispatchTraceRouteResult(uint32_t nodeId);
     void dispatchTraceRouteNodeCallback(uint32_t nodeId);
     void dispatchMapNodeCallback(uint32_t nodeId);
     void dispatchChatNodeCallback(uint32_t nodeId);
@@ -134,6 +136,13 @@ class MuiTestHarness
     bool messagesPanelVisible() const;
     bool mapPanelVisible() const;
     uintptr_t topMessagesNodeImageSrc() const;
+    const char *firstTraceRouteTowardsLabel() const;
+    uintptr_t firstTraceRouteTowardsImageSrc() const;
+    void clickFirstTraceRouteTowardsButton();
+    const char *signalScannerTargetLabel() const;
+    uintptr_t signalScannerTargetImageSrc() const;
+    const char *traceRouteTargetLabel() const;
+    uintptr_t traceRouteTargetImageSrc() const;
     void dispatchVirtualNodeEvent(uint32_t nodeId, lv_event_code_t eventCode);
     void dispatchVirtualNodePositionEvent(uint32_t nodeId);
     bool focusRenderedVirtualNode(uint32_t nodeId);

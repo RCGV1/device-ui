@@ -88,7 +88,62 @@ TEST_CASE("macro-off legacy semantic helpers and actions use retained panel stat
     CHECK(harness.visibleIndex().size() == 0);
 }
 
-TEST_CASE("macro-off equal timestamp purge follows retained legacy visible insertion order")
+TEST_CASE("macro-off scanner and traceroute selected targets render retained panel role and name")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(1700000000U);
+
+    const NodeId router = 0x11113333U;
+    harness.addNodeFixture(router, "RTR1", "Router One", 1699999900U, MeshtasticView::router, true, false, 1);
+    harness.selectNode(router);
+
+    harness.showSignalScanner();
+    CHECK(harness.signalScannerTargetLabel() == doctest::String("RTR1"));
+    CHECK(harness.signalScannerTargetImageSrc() == reinterpret_cast<uintptr_t>(&img_node_router_image));
+
+    harness.showTraceRoute();
+    CHECK(harness.traceRouteTargetLabel() == doctest::String("Router One"));
+    CHECK(harness.traceRouteTargetImageSrc() == reinterpret_cast<uintptr_t>(&img_node_router_image));
+
+    const NodeId blocked = 0x11114444U;
+    harness.addNodeFixture(blocked, "BLK1", "Blocked One", 1699999800U, MeshtasticView::client, false, true, 1);
+    harness.selectNode(blocked);
+
+    harness.showSignalScanner();
+    CHECK(harness.signalScannerTargetLabel() == doctest::String("BLK1"));
+    CHECK(harness.signalScannerTargetImageSrc() == reinterpret_cast<uintptr_t>(&img_unmessagable_image));
+
+    harness.showTraceRoute();
+    CHECK(harness.traceRouteTargetLabel() == doctest::String("Blocked One"));
+    CHECK(harness.traceRouteTargetImageSrc() == reinterpret_cast<uintptr_t>(&img_unmessagable_image));
+
+    CHECK(harness.store().size() == 0);
+    CHECK(harness.visibleIndex().size() == 0);
+}
+
+TEST_CASE("macro-off traceroute route results render retained panel node and reverse action")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(1700000000U);
+
+    const NodeId router = 0x11115555U;
+    harness.addNodeFixture(router, "RTR2", "Router Two", 1699999900U, MeshtasticView::router, true, false, 1);
+    harness.showTraceRoute();
+    harness.dispatchTraceRouteResult(router);
+
+    CHECK(harness.firstTraceRouteTowardsLabel() == doctest::String("RTR2"));
+    CHECK(harness.firstTraceRouteTowardsImageSrc() == reinterpret_cast<uintptr_t>(&img_node_router_image));
+
+    harness.clickFirstTraceRouteTowardsButton();
+    CHECK(harness.nodesPanelVisible());
+    CHECK(harness.selectedNode() == router);
+    CHECK(harness.store().size() == 0);
+    CHECK(harness.visibleIndex().size() == 0);
+}
+
+TEST_CASE("macro-off purge keeps the retained legacy equal-timestamp row order")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
@@ -98,12 +153,28 @@ TEST_CASE("macro-off equal timestamp purge follows retained legacy visible inser
     harness.addNodeFixture(0x10000000U, "N100", "Node 100", 900, MeshtasticView::client, true, false, 0);
     harness.addNodeFixture(0x20000000U, "N200", "Node 200", 900, MeshtasticView::client, true, false, 0);
 
-    CHECK(harness.nodePurgeCandidate(0x40000000U) == 0x30000000U);
+    CHECK(harness.nodePurgeCandidate(0x40000000U) == 0x20000000U);
 
     harness.updateLastHeardFixture(0x30000000U);
-    CHECK(harness.nodePurgeCandidate(0x40000000U) == 0x10000000U);
+    CHECK(harness.nodePurgeCandidate(0x40000000U) == 0x20000000U);
 
     harness.addNodeFixture(0x50000000U, "N500", "Node 500", 2000, MeshtasticView::client, true, false, 0);
-    CHECK(harness.nodePurgeCandidate(0x40000000U) == 0x10000000U);
+    CHECK(harness.nodePurgeCandidate(0x40000000U) == 0x20000000U);
 }
+
+TEST_CASE("macro-off purge prefers retained stale unknown rows before oldest named rows")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(1000);
+
+    harness.addNodeFixture(0x10000000U, "OLD", "Old Named", 100, MeshtasticView::client, true, false, 0);
+    harness.addUnknownNodeFixture(0x20000000U, 0, 800, static_cast<uint8_t>(MeshtasticView::unknown), false, false);
+    harness.addNodeFixture(0x30000000U, "NEW", "New Named", 950, MeshtasticView::client, true, false, 0);
+    harness.addNodeFixture(0x40000000U, "NWR", "Newer Named", 960, MeshtasticView::client, true, false, 0);
+    harness.addNodeFixture(0x50000000U, "NWS", "Newest Named", 970, MeshtasticView::client, true, false, 0);
+
+    CHECK(harness.nodePurgeCandidate(0x60000000U) == 0x20000000U);
+}
+
 #endif

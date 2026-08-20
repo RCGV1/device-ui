@@ -108,6 +108,18 @@ NodeId nodeIdFromPanel(lv_obj_t *panel)
     return static_cast<NodeId>(reinterpret_cast<uintptr_t>(panel->LV_OBJ_IDX(node_lbl_idx)->user_data));
 }
 
+MeshtasticView::eRole nodeRoleFromPanel(lv_obj_t *panel)
+{
+    if (!panel || lv_obj_get_child_count(panel) <= node_img_idx)
+        return MeshtasticView::eRole::unknown;
+    return static_cast<MeshtasticView::eRole>(reinterpret_cast<uintptr_t>(panel->LV_OBJ_IDX(node_img_idx)->user_data));
+}
+
+bool nodeUnmessagableFromPanel(lv_obj_t *panel)
+{
+    return nodeRoleFromPanel(panel) == MeshtasticView::eRole::unmessagable;
+}
+
 enum ScrollDirection {
     scrollDownLeft = 1,
     scrollDown = 2,
@@ -231,23 +243,38 @@ NodePosition TFTView_320x240::nodePosition(NodeId id) const
 NodeId TFTView_320x240::nodePurgeCandidate(NodeId incoming) const
 {
     if (!shouldMaintainNodeModel()) {
-        uint32_t oldest = 0;
-        uint32_t oldestLastHeard = UINT32_MAX;
         const uint32_t childCount = lv_obj_get_child_count(objects.nodes_panel);
-        for (uint32_t index = 0; index < childCount; ++index) {
-            lv_obj_t *panel = lv_obj_get_child(objects.nodes_panel, static_cast<int32_t>(index));
+        if (childCount <= 1) {
+            return 0;
+        }
+
+        const auto removable = [this, incoming](lv_obj_t *panel) {
             const NodeId nodeId = nodeIdFromPanel(panel);
-            if (!nodeId || nodeId == incoming || nodeId == ownNode || chats.find(nodeId) != chats.end() ||
-                nodes.find(nodeId) == nodes.end())
-                continue;
+            return nodeId && nodeId != incoming && nodeId != ownNode && chats.find(nodeId) == chats.end() &&
+                   nodes.find(nodeId) != nodes.end();
+        };
+        const auto staleUnknown = [this](lv_obj_t *panel) {
             const uint32_t lastHeard =
                 static_cast<uint32_t>(reinterpret_cast<uintptr_t>(panel->LV_OBJ_IDX(node_lh_idx)->user_data));
-            if (!oldest || lastHeard < oldestLastHeard) {
-                oldest = nodeId;
-                oldestLastHeard = lastHeard;
+            return static_cast<eRole>(reinterpret_cast<uintptr_t>(panel->LV_OBJ_IDX(node_img_idx)->user_data)) ==
+                       eRole::unknown &&
+                   static_cast<uint32_t>(curtime) >= lastHeard && static_cast<uint32_t>(curtime) - lastHeard >= 120;
+        };
+
+        const uint32_t preferredPopulation = (childCount * 4 + 4) / 5;
+        for (uint32_t offset = 0; offset < preferredPopulation; ++offset) {
+            lv_obj_t *panel = lv_obj_get_child(objects.nodes_panel, static_cast<int32_t>(childCount - 1 - offset));
+            if (removable(panel) && staleUnknown(panel)) {
+                return nodeIdFromPanel(panel);
             }
         }
-        return oldest;
+        for (uint32_t offset = 0; offset < childCount; ++offset) {
+            lv_obj_t *panel = lv_obj_get_child(objects.nodes_panel, static_cast<int32_t>(childCount - 1 - offset));
+            if (removable(panel)) {
+                return nodeIdFromPanel(panel);
+            }
+        }
+        return 0;
     }
     return nodeStore.selectPurgeCandidate(incoming, ownNode, static_cast<uint32_t>(curtime));
 }
@@ -526,9 +553,22 @@ void TFTView_320x240::showTraceRouteForTesting()
     ui_event_trace_route(nullptr);
 }
 
+void TFTView_320x240::showSignalScannerForTesting()
+{
+    ui_event_signal_scanner(nullptr);
+}
+
 void TFTView_320x240::startTraceRouteForTesting()
 {
     ui_event_trace_route_start(nullptr);
+}
+
+void TFTView_320x240::dispatchTraceRouteResultForTesting(NodeId id)
+{
+    meshtastic_RouteDiscovery route = meshtastic_RouteDiscovery_init_default;
+    route.route_count = 1;
+    route.route[0] = id;
+    handleResponse(id, 0, route);
 }
 
 void TFTView_320x240::dispatchTraceRouteNodeCallbackForTesting(NodeId id)
@@ -612,6 +652,49 @@ bool TFTView_320x240::mapPanelVisibleForTesting() const
 uintptr_t TFTView_320x240::topMessagesNodeImageSrcForTesting() const
 {
     return reinterpret_cast<uintptr_t>(lv_obj_get_style_bg_image_src(objects.top_messages_node_image, LV_PART_MAIN));
+}
+
+const char *TFTView_320x240::firstTraceRouteTowardsLabelForTesting() const
+{
+    lv_obj_t *button = lv_obj_get_child(objects.route_towards_panel, 0);
+    if (!button || lv_obj_get_child_count(button) < 2)
+        return nullptr;
+    return lv_label_get_text(lv_obj_get_child(button, 1));
+}
+
+uintptr_t TFTView_320x240::firstTraceRouteTowardsImageSrcForTesting() const
+{
+    lv_obj_t *button = lv_obj_get_child(objects.route_towards_panel, 0);
+    if (!button || lv_obj_get_child_count(button) < 1)
+        return 0;
+    return reinterpret_cast<uintptr_t>(lv_image_get_src(lv_obj_get_child(button, 0)));
+}
+
+void TFTView_320x240::clickFirstTraceRouteTowardsButtonForTesting()
+{
+    lv_obj_t *button = lv_obj_get_child(objects.route_towards_panel, 0);
+    if (button)
+        lv_obj_send_event(button, LV_EVENT_CLICKED, nullptr);
+}
+
+const char *TFTView_320x240::signalScannerTargetLabelForTesting() const
+{
+    return lv_label_get_text(objects.signal_scanner_node_button_label);
+}
+
+uintptr_t TFTView_320x240::signalScannerTargetImageSrcForTesting() const
+{
+    return reinterpret_cast<uintptr_t>(lv_image_get_src(objects.signal_scanner_node_image));
+}
+
+const char *TFTView_320x240::traceRouteTargetLabelForTesting() const
+{
+    return lv_label_get_text(objects.trace_route_to_button_label);
+}
+
+uintptr_t TFTView_320x240::traceRouteTargetImageSrcForTesting() const
+{
+    return reinterpret_cast<uintptr_t>(lv_image_get_src(objects.trace_route_to_image));
 }
 
 void TFTView_320x240::sendActiveTextForTesting(char *msg)
@@ -3467,8 +3550,9 @@ void TFTView_320x240::ui_event_signal_scanner(lv_event_t *e)
 #endif
     ) {
         const NodeRecord *record = THIS->nodeRecord(currentNode);
-        THIS->setNodeImage(currentNode, record ? (MeshtasticView::eRole)record->user.role : eRole::unknown,
-                           record && record->unmessagable, objects.signal_scanner_node_image);
+        lv_obj_t *panel = THIS->nodePanel(currentNode);
+        THIS->setNodeImage(currentNode, record ? (MeshtasticView::eRole)record->user.role : nodeRoleFromPanel(panel),
+                           record ? record->unmessagable : nodeUnmessagableFromPanel(panel), objects.signal_scanner_node_image);
         const char *lbs = THIS->nodeShortName(currentNode);
         lv_label_set_text(objects.signal_scanner_node_button_label, lbs ? lbs : "");
         lv_obj_clear_state(objects.signal_scanner_start_button, LV_STATE_DISABLED);
@@ -3574,8 +3658,9 @@ void TFTView_320x240::ui_event_trace_route(lv_event_t *e)
 #endif
     ) {
         const NodeRecord *record = THIS->nodeRecord(THIS->currentNode);
-        THIS->setNodeImage(THIS->currentNode, record ? (MeshtasticView::eRole)record->user.role : eRole::unknown,
-                           record && record->unmessagable, objects.trace_route_to_image);
+        lv_obj_t *panel = THIS->nodePanel(THIS->currentNode);
+        THIS->setNodeImage(THIS->currentNode, record ? (MeshtasticView::eRole)record->user.role : nodeRoleFromPanel(panel),
+                           record ? record->unmessagable : nodeUnmessagableFromPanel(panel), objects.trace_route_to_image);
         const char *lbl = THIS->nodeDisplayName(THIS->currentNode);
         lv_label_set_text(objects.trace_route_to_button_label, lbl ? lbl : "");
         lv_obj_clear_state(objects.trace_route_start_button, LV_STATE_DISABLED);
@@ -6255,6 +6340,8 @@ void TFTView_320x240::addNodeToTraceRoute(uint32_t nodeNum, lv_obj_t *panel)
             lv_obj_t *img = lv_img_create(btn);
             if (record) {
                 setNodeImage(nodeNum, (MeshtasticView::eRole)record->user.role, record->unmessagable, img);
+            } else if (panelForNode) {
+                setNodeImage(nodeNum, nodeRoleFromPanel(panelForNode), nodeUnmessagableFromPanel(panelForNode), img);
             } else {
                 setNodeImage(0, eRole::unknown, false, img);
             }
@@ -6273,7 +6360,7 @@ void TFTView_320x240::addNodeToTraceRoute(uint32_t nodeNum, lv_obj_t *panel)
             lv_obj_set_pos(label, 35, 10);
             lv_obj_set_size(label, LV_PCT(80), LV_SIZE_CONTENT);
             lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL);
-            if (record) {
+            if (record || panelForNode) {
                 if (nodeNum != ownNode) {
                     if (panelForNode
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST

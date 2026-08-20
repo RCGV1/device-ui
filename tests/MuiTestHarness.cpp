@@ -432,9 +432,19 @@ void MuiTestHarness::showTraceRoute()
     view->showTraceRouteForTesting();
 }
 
+void MuiTestHarness::showSignalScanner()
+{
+    view->showSignalScannerForTesting();
+}
+
 void MuiTestHarness::startTraceRoute()
 {
     view->startTraceRouteForTesting();
+}
+
+void MuiTestHarness::dispatchTraceRouteResult(uint32_t nodeId)
+{
+    view->dispatchTraceRouteResultForTesting(nodeId);
 }
 
 void MuiTestHarness::dispatchTraceRouteNodeCallback(uint32_t nodeId)
@@ -517,6 +527,41 @@ bool MuiTestHarness::mapPanelVisible() const
 uintptr_t MuiTestHarness::topMessagesNodeImageSrc() const
 {
     return view->topMessagesNodeImageSrcForTesting();
+}
+
+const char *MuiTestHarness::firstTraceRouteTowardsLabel() const
+{
+    return view->firstTraceRouteTowardsLabelForTesting();
+}
+
+uintptr_t MuiTestHarness::firstTraceRouteTowardsImageSrc() const
+{
+    return view->firstTraceRouteTowardsImageSrcForTesting();
+}
+
+void MuiTestHarness::clickFirstTraceRouteTowardsButton()
+{
+    view->clickFirstTraceRouteTowardsButtonForTesting();
+}
+
+const char *MuiTestHarness::signalScannerTargetLabel() const
+{
+    return view->signalScannerTargetLabelForTesting();
+}
+
+uintptr_t MuiTestHarness::signalScannerTargetImageSrc() const
+{
+    return view->signalScannerTargetImageSrcForTesting();
+}
+
+const char *MuiTestHarness::traceRouteTargetLabel() const
+{
+    return view->traceRouteTargetLabelForTesting();
+}
+
+uintptr_t MuiTestHarness::traceRouteTargetImageSrc() const
+{
+    return view->traceRouteTargetImageSrcForTesting();
 }
 
 namespace
