@@ -121,7 +121,11 @@ class TFTView_320x240 : public MeshtasticView
     void setLoRaHopLimitForTesting(uint8_t hopLimit);
     void selectNodeForTesting(NodeId id);
     void scanSignalForTesting(uint32_t scanNo);
+    void showTraceRouteForTesting();
     void startTraceRouteForTesting();
+    void dispatchTraceRouteNodeCallbackForTesting(NodeId id);
+    bool nodesPanelVisibleForTesting() const;
+    bool traceRoutePanelVisibleForTesting() const;
     void sendDirectTextForTesting(NodeId id, char *msg);
     uint8_t nodeHopLimitForTesting(NodeId id, int8_t unknownHops) const;
     uintptr_t traceRouteNodeCallbackPayloadForTesting(NodeId id) const;

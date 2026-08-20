@@ -348,9 +348,29 @@ void MuiTestHarness::scanSignal(uint32_t scanNo)
     view->scanSignalForTesting(scanNo);
 }
 
+void MuiTestHarness::showTraceRoute()
+{
+    view->showTraceRouteForTesting();
+}
+
 void MuiTestHarness::startTraceRoute()
 {
     view->startTraceRouteForTesting();
+}
+
+void MuiTestHarness::dispatchTraceRouteNodeCallback(uint32_t nodeId)
+{
+    view->dispatchTraceRouteNodeCallbackForTesting(nodeId);
+}
+
+bool MuiTestHarness::nodesPanelVisible() const
+{
+    return view->nodesPanelVisibleForTesting();
+}
+
+bool MuiTestHarness::traceRoutePanelVisible() const
+{
+    return view->traceRoutePanelVisibleForTesting();
 }
 
 void MuiTestHarness::sendDirectText(uint32_t nodeId, const char *msg)

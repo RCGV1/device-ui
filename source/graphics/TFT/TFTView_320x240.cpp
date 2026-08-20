@@ -414,9 +414,31 @@ void TFTView_320x240::scanSignalForTesting(uint32_t scanNo)
     scanSignal(scanNo);
 }
 
+void TFTView_320x240::showTraceRouteForTesting()
+{
+    ui_event_trace_route(nullptr);
+}
+
 void TFTView_320x240::startTraceRouteForTesting()
 {
     ui_event_trace_route_start(nullptr);
+}
+
+void TFTView_320x240::dispatchTraceRouteNodeCallbackForTesting(NodeId id)
+{
+    lv_event_t event{};
+    event.user_data = traceRouteNodeCallbackUserData(id);
+    ui_event_trace_route_node(&event);
+}
+
+bool TFTView_320x240::nodesPanelVisibleForTesting() const
+{
+    return activePanel == objects.nodes_panel && !lv_obj_has_flag(objects.nodes_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+bool TFTView_320x240::traceRoutePanelVisibleForTesting() const
+{
+    return activePanel == objects.trace_route_panel && !lv_obj_has_flag(objects.trace_route_panel, LV_OBJ_FLAG_HIDDEN);
 }
 
 void TFTView_320x240::sendDirectTextForTesting(NodeId id, char *msg)

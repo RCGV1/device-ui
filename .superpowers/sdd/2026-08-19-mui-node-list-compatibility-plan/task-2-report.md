@@ -71,6 +71,40 @@ GREEN:
   - `ctest --test-dir build-mui-node-list-headless --output-on-failure`
   - 9/9 tests passed.
 
+## Review Fix Round 2
+
+Addressed the remaining re-review gap within Task 2 scope:
+
+- Added a focused behavior test that dispatches the actual legacy `ui_event_trace_route_node` callback path through a test-only harness wrapper.
+- The test proves `NodeId` callback data is adapted to a retained panel only at final presentation:
+  - With a corrupted retained panel still present, dispatching the callback opens the normal nodes panel.
+  - After the retained panel is removed, dispatching the same `NodeId` callback data leaves the trace-route panel visible and does not navigate to the nodes panel.
+- Normal production presentation remains unchanged; the new code is test-only wrapper surface around the existing callback.
+
+RED evidence:
+
+- Command:
+  - `PYTHONPATH=/Users/benjaminfaershtein/.codex/venvs/device-ui-native/lib/python3.14/site-packages cmake --build build-mui-node-list-headless --target tests -j4 && ./build-mui-node-list-headless/bin/tests --test-case="legacy trace-route node callback resolves NodeId at final presentation"`
+- Expected failure after adding the behavior test/harness calls before implementations:
+  - link failed with undefined symbols for `TFTView_320x240::dispatchTraceRouteNodeCallbackForTesting`, `nodesPanelVisibleForTesting`, and `traceRoutePanelVisibleForTesting`.
+- Note:
+  - The first GREEN attempt showed the new test was using the route-start action rather than opening the trace-route panel; the test was corrected to use an explicit `showTraceRoute()` helper before recording the final GREEN evidence.
+
+GREEN evidence after fix:
+
+- Scoped format:
+  - `trunk fmt include/graphics/view/TFT/TFTView_320x240.h source/graphics/TFT/TFTView_320x240.cpp tests/MuiTestHarness.h tests/MuiTestHarness.cpp tests/test_MuiNodeSemanticBoundary.cpp`
+  - Checked 5 files, no issues.
+- Focused regression:
+  - `PYTHONPATH=/Users/benjaminfaershtein/.codex/venvs/device-ui-native/lib/python3.14/site-packages cmake --build build-mui-node-list-headless --target tests -j4 && ./build-mui-node-list-headless/bin/tests --test-case="legacy trace-route node callback resolves NodeId at final presentation"`
+  - 1 passed, 0 failed, 46 skipped, 5 assertions passed.
+- Full doctest executable:
+  - `./build-mui-node-list-headless/bin/tests`
+  - 47 passed, 0 failed, 1563 assertions passed.
+- Full CTest:
+  - `ctest --test-dir build-mui-node-list-headless --output-on-failure`
+  - 9/9 tests passed.
+
 ## Formatting
 
 - Scoped formatter passed:

@@ -85,7 +85,11 @@ class MuiTestHarness
     void setLoRaHopLimit(uint8_t hopLimit);
     void selectNode(uint32_t nodeId);
     void scanSignal(uint32_t scanNo = 0);
+    void showTraceRoute();
     void startTraceRoute();
+    void dispatchTraceRouteNodeCallback(uint32_t nodeId);
+    bool nodesPanelVisible() const;
+    bool traceRoutePanelVisible() const;
     void sendDirectText(uint32_t nodeId, const char *msg);
     uint8_t nodeHopLimit(uint32_t nodeId, int8_t unknownHops) const;
     uintptr_t traceRouteNodeCallbackPayload(uint32_t nodeId) const;

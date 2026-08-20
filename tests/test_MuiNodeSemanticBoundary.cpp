@@ -94,4 +94,25 @@ TEST_CASE("legacy action callbacks use NodeId model semantics after panel corrup
     CHECK(harness.traceRouteNodeCallbackPayload(0x1234abcd) == 0x1234abcd);
     CHECK(harness.nodeChannel(0x1234abcd) == 3);
 }
+
+TEST_CASE("legacy trace-route node callback resolves NodeId at final presentation")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    harness.addNodeFixture(0x1234abcd, "MODL", "Model Node", 1000, MeshtasticView::router, true, false, 3);
+    harness.corruptLegacyNodePanel(0x1234abcd);
+
+    harness.showTraceRoute();
+    CHECK(harness.traceRoutePanelVisible());
+    harness.dispatchTraceRouteNodeCallback(0x1234abcd);
+    CHECK(harness.nodesPanelVisible());
+
+    harness.showTraceRoute();
+    CHECK(harness.traceRoutePanelVisible());
+    harness.removeLegacyNodePanel(0x1234abcd);
+    harness.dispatchTraceRouteNodeCallback(0x1234abcd);
+    CHECK(harness.traceRoutePanelVisible());
+    CHECK_FALSE(harness.nodesPanelVisible());
+}
 #endif
