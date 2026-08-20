@@ -58,15 +58,18 @@ if [[ ${run_for_ms} != 0 ]]; then
 fi
 
 child_pids=()
-cleanup_children() {
-	local status=$?
-	trap - EXIT INT TERM
+terminate_children() {
 	for pid in "${child_pids[@]}"; do
 		kill "${pid}" >/dev/null 2>&1 || true
 	done
 	for pid in "${child_pids[@]}"; do
 		wait "${pid}" >/dev/null 2>&1 || true
 	done
+}
+cleanup_children() {
+	local status=$?
+	trap - EXIT INT TERM
+	terminate_children
 	exit "${status}"
 }
 trap cleanup_children EXIT INT TERM
@@ -84,17 +87,30 @@ pair)
 	"${build_dir}/bin/mui_node_list_simulator" --implementation virtual_candidate "${run_args[@]}" &
 	child_pids+=("$!")
 	status=0
-	for pid in "${child_pids[@]}"; do
-		if wait "${pid}"; then
-			:
+	remaining=${#child_pids[@]}
+	while [[ ${remaining} -gt 0 ]]; do
+		if wait -n; then
+			child_status=0
 		else
-			pid_status=$?
-			if [[ ${status} -eq 0 ]]; then
-				status=${pid_status}
-			fi
+			child_status=$?
+		fi
+		remaining=$((remaining - 1))
+		if [[ ${child_status} -eq 0 ]]; then
+			:
+		elif [[ ${child_status} -eq 127 ]]; then
+			status=127
+			break
+		else
+			status=${child_status}
+			break
 		fi
 	done
+	if [[ ${status} -ne 0 ]]; then
+		trap - EXIT INT TERM
+		terminate_children
+		exit "${status}"
+	fi
 	child_pids=()
-	exit "${status}"
+	exit 0
 	;;
 esac

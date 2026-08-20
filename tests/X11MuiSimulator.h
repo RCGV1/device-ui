@@ -33,6 +33,10 @@ class X11MuiSimulator
     int32_t nodeListScrollYForTesting() const;
     bool virtualNodeListEnabledForTesting() const;
     uint32_t selectedNodeForTesting() const;
+    uintptr_t focusedObjectForTesting() const;
+    bool focusedObjectCenterForTesting(int16_t &x, int16_t &y) const;
+    bool nodeListClickTargetCenterForTesting(int16_t &x, int16_t &y) const;
+    bool nodeListClickTargetForTesting(int16_t &x, int16_t &y, uintptr_t &target) const;
 
     lv_indev_t *pointerInputForTesting() const { return pointerInput; }
     lv_indev_t *keyboardInputForTesting() const { return keyboardInput; }

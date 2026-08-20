@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include "X11MuiSimulator.h"
+#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cstdlib>
@@ -19,6 +20,8 @@
 
 namespace
 {
+int x11ErrorCount = 0;
+
 struct Options {
     X11MuiSimulator::Implementation implementation = X11MuiSimulator::Implementation::Legacy;
     size_t nodes = 100;
@@ -162,11 +165,40 @@ struct X11ExerciseReport {
     bool wheelSent = false;
     bool clickSent = false;
     bool keySent = false;
+    bool dragXTestOk = false;
+    bool wheelXTestOk = false;
+    bool clickXTestOk = false;
+    bool keyXTestOk = false;
     int32_t scrollBefore = 0;
-    int32_t scrollAfter = 0;
+    int32_t dragScrollBefore = 0;
+    int32_t dragScrollAfter = 0;
+    int32_t wheelScrollBefore = 0;
+    int32_t wheelScrollAfter = 0;
+    int32_t scrollAfterAll = 0;
     uint32_t selectedBefore = 0;
-    uint32_t selectedAfter = 0;
+    uint32_t clickSelectedBefore = 0;
+    uint32_t clickSelectedAfter = 0;
+    uint32_t selectedAfterAll = 0;
+    uintptr_t clickFocusBefore = 0;
+    uintptr_t clickFocusAfter = 0;
+    uintptr_t clickTarget = 0;
+    int16_t clickX = 0;
+    int16_t clickY = 0;
+    uintptr_t keyFocusBefore = 0;
+    uintptr_t keyFocusAfter = 0;
 };
+
+int captureX11Error(Display *, XErrorEvent *)
+{
+    ++x11ErrorCount;
+    return 0;
+}
+
+bool xTestSucceeded(Display *display, bool callStatus, int errorCountBefore)
+{
+    XSync(display, False);
+    return callStatus && x11ErrorCount == errorCountBefore;
+}
 
 class ScopedDirectoryLock
 {
@@ -227,49 +259,82 @@ X11ExerciseReport exerciseX11Input(X11MuiSimulator &simulator, const std::string
         return report;
     }
 
+    XErrorHandler previousErrorHandler = XSetErrorHandler(captureX11Error);
+
     XRaiseWindow(display, window);
     XSetInputFocus(display, window, RevertToParent, CurrentTime);
     XWarpPointer(display, None, window, 0, 0, 0, 0, 160, 210);
     XFlush(display);
     pumpFor(simulator, 40);
 
-    XTestFakeButtonEvent(display, Button1, True, CurrentTime);
+    report.dragScrollBefore = simulator.nodeListScrollYForTesting();
+    int errorCountBefore = x11ErrorCount;
+    bool dragStatus = XTestFakeButtonEvent(display, Button1, True, CurrentTime);
     for (int y : {180, 140, 100, 60, 40}) {
-        XTestFakeMotionEvent(display, DefaultScreen(display), 160, y, CurrentTime);
+        dragStatus = XTestFakeMotionEvent(display, DefaultScreen(display), 160, y, CurrentTime) && dragStatus;
         XFlush(display);
         pumpFor(simulator, 30);
     }
-    XTestFakeButtonEvent(display, Button1, False, CurrentTime);
-    XFlush(display);
+    dragStatus = XTestFakeButtonEvent(display, Button1, False, CurrentTime) && dragStatus;
+    report.dragXTestOk = xTestSucceeded(display, dragStatus, errorCountBefore);
     report.dragSent = true;
     pumpFor(simulator, 120);
+    report.dragScrollAfter = simulator.nodeListScrollYForTesting();
 
+    report.wheelScrollBefore = simulator.nodeListScrollYForTesting();
+    errorCountBefore = x11ErrorCount;
+    bool wheelStatus = true;
     for (int i = 0; i < 4; ++i) {
-        XTestFakeButtonEvent(display, Button5, True, CurrentTime);
-        XTestFakeButtonEvent(display, Button5, False, CurrentTime);
+        wheelStatus = XTestFakeButtonEvent(display, Button5, True, CurrentTime) && wheelStatus;
+        wheelStatus = XTestFakeButtonEvent(display, Button5, False, CurrentTime) && wheelStatus;
     }
-    XFlush(display);
+    report.wheelXTestOk = xTestSucceeded(display, wheelStatus, errorCountBefore);
     report.wheelSent = true;
-    pumpFor(simulator, 120);
+    pumpFor(simulator, 350);
+    report.wheelScrollAfter = simulator.nodeListScrollYForTesting();
 
-    XWarpPointer(display, None, window, 0, 0, 0, 0, 160, 82);
-    XTestFakeButtonEvent(display, Button1, True, CurrentTime);
-    XTestFakeButtonEvent(display, Button1, False, CurrentTime);
+    report.clickSelectedBefore = simulator.selectedNodeForTesting();
+    report.clickFocusBefore = simulator.focusedObjectForTesting();
+    int16_t clickX = 160;
+    int16_t clickY = 82;
+    uintptr_t clickTarget = 0;
+    if (simulator.nodeListClickTargetForTesting(clickX, clickY, clickTarget)) {
+        clickX = std::max<int16_t>(5, std::min<int16_t>(314, clickX));
+        clickY = std::max<int16_t>(5, std::min<int16_t>(234, clickY));
+    }
+    report.clickTarget = clickTarget;
+    report.clickX = clickX;
+    report.clickY = clickY;
+    errorCountBefore = x11ErrorCount;
+    bool clickStatus = XTestFakeMotionEvent(display, DefaultScreen(display), clickX, clickY, CurrentTime);
+    XWarpPointer(display, None, window, 0, 0, 0, 0, clickX, clickY);
     XFlush(display);
+    pumpFor(simulator, 40);
+    clickStatus = XTestFakeButtonEvent(display, Button1, True, CurrentTime) && clickStatus;
+    XFlush(display);
+    pumpFor(simulator, 80);
+    clickStatus = XTestFakeButtonEvent(display, Button1, False, CurrentTime) && clickStatus;
+    report.clickXTestOk = xTestSucceeded(display, clickStatus, errorCountBefore);
     report.clickSent = true;
-    pumpFor(simulator, 120);
+    pumpFor(simulator, 320);
+    report.clickSelectedAfter = simulator.selectedNodeForTesting();
+    report.clickFocusAfter = simulator.focusedObjectForTesting();
 
+    report.keyFocusBefore = simulator.focusedObjectForTesting();
     const KeyCode key = XKeysymToKeycode(display, XK_Next);
     if (key != 0) {
-        XTestFakeKeyEvent(display, key, True, CurrentTime);
-        XTestFakeKeyEvent(display, key, False, CurrentTime);
-        XFlush(display);
+        errorCountBefore = x11ErrorCount;
+        bool keyStatus = XTestFakeKeyEvent(display, key, True, CurrentTime);
+        keyStatus = XTestFakeKeyEvent(display, key, False, CurrentTime) && keyStatus;
+        report.keyXTestOk = xTestSucceeded(display, keyStatus, errorCountBefore);
         report.keySent = true;
         pumpFor(simulator, 120);
     }
+    report.keyFocusAfter = simulator.focusedObjectForTesting();
 
-    report.scrollAfter = simulator.nodeListScrollYForTesting();
-    report.selectedAfter = simulator.selectedNodeForTesting();
+    report.scrollAfterAll = simulator.nodeListScrollYForTesting();
+    report.selectedAfterAll = simulator.selectedNodeForTesting();
+    XSetErrorHandler(previousErrorHandler);
     XCloseDisplay(display);
     return report;
 }
@@ -292,11 +357,39 @@ bool writeReport(const Options &options, const X11MuiSimulator &simulator, const
     output << "wheel_sent=" << (exercise.wheelSent ? 1 : 0) << '\n';
     output << "click_sent=" << (exercise.clickSent ? 1 : 0) << '\n';
     output << "key_sent=" << (exercise.keySent ? 1 : 0) << '\n';
+    output << "drag_xtest_ok=" << (exercise.dragXTestOk ? 1 : 0) << '\n';
+    output << "wheel_xtest_ok=" << (exercise.wheelXTestOk ? 1 : 0) << '\n';
+    output << "click_xtest_ok=" << (exercise.clickXTestOk ? 1 : 0) << '\n';
+    output << "key_xtest_ok=" << (exercise.keyXTestOk ? 1 : 0) << '\n';
     output << "scroll_before=" << exercise.scrollBefore << '\n';
-    output << "scroll_after=" << exercise.scrollAfter << '\n';
-    output << "scroll_changed=" << (exercise.scrollBefore != exercise.scrollAfter ? 1 : 0) << '\n';
+    output << "scroll_after=" << exercise.scrollAfterAll << '\n';
+    output << "scroll_changed=" << (exercise.scrollBefore != exercise.scrollAfterAll ? 1 : 0) << '\n';
+    output << "drag_scroll_before=" << exercise.dragScrollBefore << '\n';
+    output << "drag_scroll_after=" << exercise.dragScrollAfter << '\n';
+    output << "drag_scroll_changed=" << (exercise.dragScrollBefore != exercise.dragScrollAfter ? 1 : 0) << '\n';
+    output << "wheel_scroll_before=" << exercise.wheelScrollBefore << '\n';
+    output << "wheel_scroll_after=" << exercise.wheelScrollAfter << '\n';
+    output << "wheel_scroll_changed=" << (exercise.wheelScrollBefore != exercise.wheelScrollAfter ? 1 : 0) << '\n';
     output << "selected_before=" << exercise.selectedBefore << '\n';
-    output << "selected_after=" << exercise.selectedAfter << '\n';
+    output << "selected_after=" << exercise.selectedAfterAll << '\n';
+    output << "click_selected_before=" << exercise.clickSelectedBefore << '\n';
+    output << "click_selected_after=" << exercise.clickSelectedAfter << '\n';
+    output << "click_selected_changed=" << (exercise.clickSelectedBefore != exercise.clickSelectedAfter ? 1 : 0) << '\n';
+    output << "click_focus_before=" << exercise.clickFocusBefore << '\n';
+    output << "click_focus_after=" << exercise.clickFocusAfter << '\n';
+    output << "click_focus_changed=" << (exercise.clickFocusBefore != exercise.clickFocusAfter ? 1 : 0) << '\n';
+    output << "click_target=" << exercise.clickTarget << '\n';
+    output << "click_x=" << exercise.clickX << '\n';
+    output << "click_y=" << exercise.clickY << '\n';
+    output << "click_observable_changed="
+           << (exercise.clickSelectedBefore != exercise.clickSelectedAfter ||
+                       exercise.clickFocusBefore != exercise.clickFocusAfter
+                   ? 1
+                   : 0)
+           << '\n';
+    output << "key_focus_before=" << exercise.keyFocusBefore << '\n';
+    output << "key_focus_after=" << exercise.keyFocusAfter << '\n';
+    output << "key_focus_changed=" << (exercise.keyFocusBefore != exercise.keyFocusAfter ? 1 : 0) << '\n';
     output << "scope=host-relative X11/LVGL interaction; not hardware timing\n";
     return true;
 }
@@ -329,7 +422,12 @@ int main(int argc, char **argv)
         const std::string title = options.windowTitle.empty() ? "Meshtastic (320x240)" : options.windowTitle;
         exercise = exerciseX11Input(simulator, title);
         if (!exercise.openedDisplay || !exercise.foundWindow || !exercise.dragSent || !exercise.wheelSent ||
-            !exercise.clickSent || !exercise.keySent || exercise.scrollBefore == exercise.scrollAfter) {
+            !exercise.clickSent || !exercise.keySent || !exercise.dragXTestOk || !exercise.wheelXTestOk ||
+            !exercise.clickXTestOk || !exercise.keyXTestOk || exercise.dragScrollBefore == exercise.dragScrollAfter ||
+            exercise.wheelScrollBefore == exercise.wheelScrollAfter || exercise.clickTarget == 0 ||
+            (exercise.clickSelectedBefore == exercise.clickSelectedAfter &&
+             exercise.clickFocusBefore == exercise.clickFocusAfter) ||
+            exercise.keyFocusBefore == exercise.keyFocusAfter) {
             writeReport(options, simulator, exercise);
             std::cerr << "failed to exercise X11 input through LVGL\n";
             return 1;

@@ -3,7 +3,9 @@
 #include "X11MuiSimulator.h"
 #include "graphics/driver/DisplayDriverFactory.h"
 #include "graphics/driver/X11Driver.h"
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <thread>
 
 const char *firmware_version = "x11-simulator";
@@ -19,6 +21,78 @@ DisplayDriver *DisplayDriverFactory::create(const DisplayDriverConfig &config)
 {
     return &X11Driver::create(config.width(), config.height());
 }
+
+namespace
+{
+bool fullyVisibleCenter(lv_obj_t *object, int16_t &x, int16_t &y)
+{
+    if (!object || lv_obj_has_flag(object, LV_OBJ_FLAG_HIDDEN)) {
+        return false;
+    }
+
+    lv_area_t coords{};
+    lv_obj_get_coords(object, &coords);
+    if (coords.x1 < 0 || coords.y1 < 0 || coords.x2 >= 320 || coords.y2 >= 240) {
+        return false;
+    }
+    x = static_cast<int16_t>((coords.x1 + coords.x2) / 2);
+    y = static_cast<int16_t>((coords.y1 + coords.y2) / 2);
+    return true;
+}
+
+bool objectAndAncestorsVisible(lv_obj_t *object)
+{
+    for (auto *current = object; current; current = lv_obj_get_parent(current)) {
+        if (lv_obj_has_flag(current, LV_OBJ_FLAG_HIDDEN)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool acceptNodeButton(lv_obj_t *button, uint32_t selectedNode, uintptr_t focusedObject, int16_t &x, int16_t &y, uintptr_t &target)
+{
+    if (!button || !objectAndAncestorsVisible(button) || !lv_obj_check_type(button, &lv_button_class) ||
+        reinterpret_cast<uintptr_t>(button) == focusedObject || !fullyVisibleCenter(button, x, y)) {
+        return false;
+    }
+
+    const auto data = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(button)));
+    if (data != 0 && data == selectedNode) {
+        return false;
+    }
+
+    target = reinterpret_cast<uintptr_t>(button);
+    return true;
+}
+
+bool findNodeListButton(lv_obj_t *object, uint32_t selectedNode, uintptr_t focusedObject, int16_t &x, int16_t &y,
+                        uintptr_t &target)
+{
+    if (!object || !objectAndAncestorsVisible(object)) {
+        return false;
+    }
+
+    if (acceptNodeButton(object, selectedNode, focusedObject, x, y, target)) {
+        return true;
+    }
+
+    const uint32_t childCount = lv_obj_get_child_count(object);
+    if (childCount > 1) {
+        auto *rowButton = lv_obj_get_child(object, 1);
+        if (acceptNodeButton(rowButton, selectedNode, focusedObject, x, y, target)) {
+            return true;
+        }
+    }
+
+    for (uint32_t index = 0; index < childCount; ++index) {
+        if (findNodeListButton(lv_obj_get_child(object, index), selectedNode, focusedObject, x, y, target)) {
+            return true;
+        }
+    }
+    return false;
+}
+} // namespace
 
 X11MuiSimulator::X11MuiSimulator()
     : config(DisplayDriverConfig::device_t::X11, 320, 240), driver(nullptr), pointerInput(nullptr), keyboardInput(nullptr),
@@ -125,6 +199,38 @@ bool X11MuiSimulator::virtualNodeListEnabledForTesting() const
 uint32_t X11MuiSimulator::selectedNodeForTesting() const
 {
     return harness ? harness->selectedNode() : 0;
+}
+
+uintptr_t X11MuiSimulator::focusedObjectForTesting() const
+{
+    lv_group_t *group = lv_group_get_default();
+    return group ? reinterpret_cast<uintptr_t>(lv_group_get_focused(group)) : 0;
+}
+
+bool X11MuiSimulator::focusedObjectCenterForTesting(int16_t &x, int16_t &y) const
+{
+    lv_group_t *group = lv_group_get_default();
+    lv_obj_t *focused = group ? lv_group_get_focused(group) : nullptr;
+    if (!focused) {
+        return false;
+    }
+    lv_area_t coords{};
+    lv_obj_get_coords(focused, &coords);
+    x = static_cast<int16_t>((coords.x1 + coords.x2) / 2);
+    y = static_cast<int16_t>((coords.y1 + coords.y2) / 2);
+    return true;
+}
+
+bool X11MuiSimulator::nodeListClickTargetCenterForTesting(int16_t &x, int16_t &y) const
+{
+    uintptr_t target = 0;
+    return nodeListClickTargetForTesting(x, y, target);
+}
+
+bool X11MuiSimulator::nodeListClickTargetForTesting(int16_t &x, int16_t &y, uintptr_t &target) const
+{
+    auto *root = harness ? harness->nodeListRootForTesting() : nullptr;
+    return findNodeListButton(root, selectedNodeForTesting(), focusedObjectForTesting(), x, y, target);
 }
 
 void X11MuiSimulator::pointerReadCallback(lv_indev_t *indev, lv_indev_data_t *data)

@@ -63,3 +63,38 @@ Fix-round verification:
 Remaining caveat:
 
 - Generated/build warnings from existing source remain noisy in build output. No standalone UI, hardware, or docs outside this SDD report were changed.
+
+## Fix Round 2 Evidence
+
+Review findings addressed:
+
+- Pair proof now asserts each real XTest event class has its own before/after LVGL observable in both simulator processes:
+  - drag: `drag_xtest_ok=1`, `drag_scroll_before`, `drag_scroll_after`, `drag_scroll_changed=1`
+  - wheel/encoder-equivalent scroll: `wheel_xtest_ok=1`, `wheel_scroll_before`, `wheel_scroll_after`, `wheel_scroll_changed=1`
+  - click: `click_xtest_ok=1`, nonzero `click_target`, selected/focus before/after fields, and `click_observable_changed=1`
+  - key: `key_xtest_ok=1`, `key_focus_before`, `key_focus_after`, `key_focus_changed=1`
+- Click target selection now finds a fully visible node-row button and avoids the current focused/selected row when possible. This keeps the proof on the real X11 pointer path while ensuring the click causes a selection/focus transition instead of landing on unrelated controls.
+- Both CMake Xvfb helpers now use atomic display lock directories under `${TMPDIR:-/tmp}/mui-xvfb-display-locks`, start Xvfb on the reserved display, verify it is alive/ready via `xdpyinfo`, and retry/cleanup on start collision.
+- Pair CMake launcher logic and `tools/launch_node_list_simulator.sh` both monitor child processes with `wait -n`, fail fast on either child error, and terminate/reap the sibling process through retained traps.
+
+TDD RED/GREEN:
+
+- RED: after tightening `MuiX11SimulatorPairLaunch` to require per-event report fields and not rely on unvalidated sent flags, `ctest --test-dir build-task6-red -R '^MuiX11SimulatorPairLaunch$' --output-on-failure` failed because the reports lacked the required per-event evidence.
+- RED: `ctest --test-dir build-task6-red -R 'MuiX11Simulator(Input|PairLaunch)' -j2 --output-on-failure` exposed the concurrent Xvfb allocation/interference failure before the atomic reservation fix.
+- GREEN: focused manual pair repro under throwaway Xvfb passed with both simulator processes returning 0. Example report evidence included legacy `click_selected_before=0`, `click_selected_after=2684354569`, `click_target=4310327432`, `click_observable_changed=1`; virtual `click_selected_before=2684354563`, `click_selected_after=2684354574`, `click_target=4305604784`, `click_observable_changed=1`; both also had `drag_xtest_ok=1`, `wheel_xtest_ok=1`, `key_xtest_ok=1`, and the corresponding changed fields.
+- GREEN: after atomic Xvfb reservation, `ctest --test-dir build-task6-red -R 'MuiX11Simulator(Input|PairLaunch)' -j2 --output-on-failure` passed: 2/2.
+
+Fix-round verification:
+
+- `trunk fmt cmake/RunMuiX11SimulatorInputTest.cmake cmake/RunMuiX11SimulatorPairLaunchTest.cmake tests/X11MuiSimulator.cpp tests/X11MuiSimulator.h tools/mui_node_list_simulator.cpp tools/launch_node_list_simulator.sh` passed.
+- `git diff --check` passed.
+- `PYTHONPATH=/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task6-venv/lib/python3.14/site-packages cmake --build build-task6-red --target mui_node_list_simulator tests -j4` passed.
+- `PYTHONPATH=/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task6-venv/lib/python3.14/site-packages ctest --test-dir build-task6-red -R '^MuiX11SimulatorPairLaunch$' --output-on-failure` passed: 1/1.
+- `PYTHONPATH=/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task6-venv/lib/python3.14/site-packages ctest --test-dir build-task6-red --output-on-failure` passed: 3/3.
+- `PYTHONPATH=/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task6-venv/lib/python3.14/site-packages ctest --test-dir build-task6-red -R 'MuiX11Simulator(Input|PairLaunch)' -j2 --output-on-failure` passed: 2/2.
+- `cmake -S . -B build-task6-gateoff -DENABLE_MUI_X11_SIMULATOR=ON -DENABLE_DOCTESTS=ON -DPython_EXECUTABLE=/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task6-venv/bin/python && PYTHONPATH=/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task6-venv/lib/python3.14/site-packages cmake --build build-task6-gateoff --target mui_node_list_simulator tests -j4 && PYTHONPATH=/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task6-venv/lib/python3.14/site-packages ctest --test-dir build-task6-gateoff --output-on-failure` passed: 3/3.
+- `PYTHONPATH=/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task6-venv/lib/python3.14/site-packages DISPLAY=<throwaway Xvfb> tools/launch_node_list_simulator.sh build-task6-red --process-mode pair --nodes 8 --seed 42 --run-for-ms 50` passed.
+
+Remaining caveat:
+
+- Build output still contains existing warnings in generated/common UI code. A disposable untracked venv under `.codex/task6-venv` was used only so nanopb could import `google.protobuf`; no untracked build or workspace directories were staged.

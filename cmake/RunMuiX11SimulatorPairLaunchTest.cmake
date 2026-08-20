@@ -14,22 +14,9 @@ endif()
 
 set(test_script "set -e
 test_dir=\$(mktemp -d \"\${TMPDIR:-/tmp}/mui-x11-pair.XXXXXX\")
-base_display=\$((90 + (\$\$ % 100)))
-display_number=
-for offset in \$(seq 0 99); do
-    candidate=\":\$((base_display + offset))\"
-    if [ ! -e \"/tmp/.X11-unix/X\${candidate#:}\" ]; then
-        display_number=\"\${candidate}\"
-        break
-    fi
-done
-if [ -z \"\${display_number}\" ]; then
-    echo \"could not allocate an Xvfb display\" >&2
-    exit 1
-fi
 xvfb_log=\"\${test_dir}/xvfb.log\"
-\"${XVFB_EXECUTABLE}\" \"\${display_number}\" -screen 0 640x240x24 > \"\${xvfb_log}\" 2>&1 &
-xvfb_pid=\$!
+xvfb_pid=
+display_lock=
 legacy_pid=
 virtual_pid=
 cleanup() {
@@ -39,27 +26,84 @@ cleanup() {
             wait \"\${pid}\" >/dev/null 2>&1 || true
         fi
     done
-    kill \"\${xvfb_pid}\" >/dev/null 2>&1 || true
-    wait \"\${xvfb_pid}\" >/dev/null 2>&1 || true
+    if [ -n \"\${xvfb_pid}\" ]; then
+        kill \"\${xvfb_pid}\" >/dev/null 2>&1 || true
+        wait \"\${xvfb_pid}\" >/dev/null 2>&1 || true
+    fi
+    if [ -n \"\${display_lock}\" ]; then
+        rmdir \"\${display_lock}\" >/dev/null 2>&1 || true
+    fi
     rm -rf \"\${test_dir}\"
 }
 trap cleanup EXIT INT TERM
-for attempt in \$(seq 1 50); do
-    if ! kill -0 \"\${xvfb_pid}\" >/dev/null 2>&1; then
-        echo \"Xvfb exited before accepting clients\" >&2
-        cat \"\${xvfb_log}\" >&2 || true
-        exit 1
+reserve_display() {
+    lock_root=\"\${TMPDIR:-/tmp}/mui-xvfb-display-locks\"
+    mkdir -p \"\${lock_root}\"
+    for reserve_attempt in \$(seq 1 100); do
+        candidate=\$((100 + ((\$\$ + \${RANDOM} + \${reserve_attempt}) % 800)))
+        candidate_lock=\"\${lock_root}/X\${candidate}.lock\"
+        if mkdir \"\${candidate_lock}\" 2>/dev/null; then
+            display_number=\":\${candidate}\"
+            display_lock=\"\${candidate_lock}\"
+            return 0
+        fi
+    done
+    return 1
+}
+start_xvfb() {
+    for start_attempt in \$(seq 1 20); do
+        if ! reserve_display; then
+            echo \"failed to reserve an Xvfb display\" >&2
+            exit 1
+        fi
+        \"${XVFB_EXECUTABLE}\" \"\${display_number}\" -screen 0 640x240x24 > \"\${xvfb_log}\" 2>&1 &
+        xvfb_pid=\$!
+        for ready_attempt in \$(seq 1 50); do
+            if ! kill -0 \"\${xvfb_pid}\" >/dev/null 2>&1; then
+                break
+            fi
+            if DISPLAY=\"\${display_number}\" \"${XDPYINFO_EXECUTABLE}\" >/dev/null 2>&1; then
+                return 0
+            fi
+            sleep 0.1
+        done
+        kill \"\${xvfb_pid}\" >/dev/null 2>&1 || true
+        wait \"\${xvfb_pid}\" >/dev/null 2>&1 || true
+        xvfb_pid=
+        rmdir \"\${display_lock}\" >/dev/null 2>&1 || true
+        display_lock=
+    done
+    echo \"Xvfb did not become ready\" >&2
+    cat \"\${xvfb_log}\" >&2 || true
+    exit 1
+}
+start_xvfb
+wait_for_pair() {
+    status=0
+    remaining=2
+    while [ \"\${remaining}\" -gt 0 ]; do
+        if wait -n; then
+            child_status=0
+        else
+            child_status=\$?
+        fi
+        remaining=\$((remaining - 1))
+        if [ \"\${child_status}\" -ne 0 ]; then
+            status=\"\${child_status}\"
+            break
+        fi
+    done
+    if [ \"\${status}\" -ne 0 ]; then
+        kill \"\${legacy_pid}\" \"\${virtual_pid}\" >/dev/null 2>&1 || true
+        wait \"\${legacy_pid}\" >/dev/null 2>&1 || true
+        wait \"\${virtual_pid}\" >/dev/null 2>&1 || true
+        legacy_pid=
+        virtual_pid=
+        exit \"\${status}\"
     fi
-    if DISPLAY=\"\${display_number}\" \"${XDPYINFO_EXECUTABLE}\" >/dev/null 2>&1; then
-        break
-    fi
-    if [ \"\${attempt}\" -eq 50 ]; then
-        echo \"Xvfb did not become ready\" >&2
-        cat \"\${xvfb_log}\" >&2 || true
-        exit 1
-    fi
-    sleep 0.1
-done
+    legacy_pid=
+    virtual_pid=
+}
 legacy_report=\"\${test_dir}/legacy.report\"
 virtual_report=\"\${test_dir}/virtual.report\"
 input_lock=\"\${test_dir}/x11-input.lock\"
@@ -67,17 +111,28 @@ DISPLAY=\"\${display_number}\" DEVICE_UI_X11_INPUT_LOCK=\"\${input_lock}\" \"${M
 legacy_pid=\$!
 DISPLAY=\"\${display_number}\" DEVICE_UI_X11_INPUT_LOCK=\"\${input_lock}\" \"${MUI_NODE_LIST_SIMULATOR}\" --implementation virtual_candidate --nodes 40 --seed 42 --run-for-ms 900 --window-title task6-virtual --exercise-x11-input --report \"\${virtual_report}\" &
 virtual_pid=\$!
-wait \"\${legacy_pid}\"
-legacy_pid=
-wait \"\${virtual_pid}\"
-virtual_pid=
+wait_for_pair
 for report in \"\${legacy_report}\" \"\${virtual_report}\"; do
     test -s \"\${report}\"
-    grep -q '^drag_sent=1$' \"\${report}\"
-    grep -q '^wheel_sent=1$' \"\${report}\"
-    grep -q '^click_sent=1$' \"\${report}\"
-    grep -q '^key_sent=1$' \"\${report}\"
-    grep -q '^scroll_changed=1$' \"\${report}\"
+    grep -q '^drag_xtest_ok=1$' \"\${report}\"
+    grep -q '^drag_scroll_before=' \"\${report}\"
+    grep -q '^drag_scroll_after=' \"\${report}\"
+    grep -q '^drag_scroll_changed=1$' \"\${report}\"
+    grep -q '^wheel_xtest_ok=1$' \"\${report}\"
+    grep -q '^wheel_scroll_before=' \"\${report}\"
+    grep -q '^wheel_scroll_after=' \"\${report}\"
+    grep -q '^wheel_scroll_changed=1$' \"\${report}\"
+    grep -q '^click_xtest_ok=1$' \"\${report}\"
+    grep -q '^click_selected_before=' \"\${report}\"
+    grep -q '^click_selected_after=' \"\${report}\"
+    grep -q '^click_focus_before=' \"\${report}\"
+    grep -q '^click_focus_after=' \"\${report}\"
+    grep -Eq '^click_target=[1-9][0-9]*$' \"\${report}\"
+    grep -q '^click_observable_changed=1$' \"\${report}\"
+    grep -q '^key_xtest_ok=1$' \"\${report}\"
+    grep -q '^key_focus_before=' \"\${report}\"
+    grep -q '^key_focus_after=' \"\${report}\"
+    grep -q '^key_focus_changed=1$' \"\${report}\"
 done
 grep -q '^implementation=legacy$' \"\${legacy_report}\"
 grep -q '^virtual_enabled=0$' \"\${legacy_report}\"
