@@ -68,6 +68,7 @@ MuiRowSnapshot snapshotVirtualRow(lv_obj_t *row)
 
 MuiRowSnapshot syncVirtualSnapshotFromLegacy(MuiTestHarness &legacy, NodeId nodeId, NodeId expanded = 0, NodeId ownNode = 0)
 {
+    legacy.enableVirtualNodeModelFixture();
     lv_obj_t *virtualRoot = lv_obj_create(lv_screen_active());
     lv_obj_set_size(virtualRoot, 320, 240);
     lv_obj_set_style_layout(virtualRoot, LV_LAYOUT_NONE, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -288,6 +289,57 @@ TEST_CASE("VirtualNodeList renders expanded legacy detail labels without adding 
     CHECK_FALSE(childHidden(row, 10));
 }
 
+TEST_CASE("VirtualNodeList matches legacy battery clamp and imperial position/weather formatting")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    meshtastic_User user{};
+    std::strcpy(user.short_name, "WX01");
+    std::strcpy(user.long_name, "Weather Candidate");
+    user.public_key.size = 32;
+    store.upsertUser(0x12345678, 0, 1699999880U, user, false);
+    store.updatePosition(0x12345678, {true, 377749000, -1224194000, 50, 9, 13});
+
+    meshtastic_DeviceMetrics device{};
+    device.battery_level = 150;
+    device.voltage = 4.12f;
+    store.updateDeviceMetrics(0x12345678, device);
+
+    meshtastic_EnvironmentMetrics environment{};
+    environment.temperature = 22.5f;
+    environment.relative_humidity = 45.0f;
+    environment.barometric_pressure = 1013.25f;
+    store.updateEnvironmentMetrics(0x12345678, environment);
+
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    NodeListRenderContext context;
+    context.metricUnits = false;
+    list.sync(store, index, 0x12345678, 1700000000U, context);
+    harness.pump();
+
+    lv_obj_t *row = boundRow(parent, 0x12345678);
+    REQUIRE(row != nullptr);
+    CHECK(labelText(row, 4) == "100% 4.12V");
+    CHECK(labelText(row, 8) == "164ft MSL");
+    CHECK(labelText(row, 9) == "72.5°F 45% 29.9inHg");
+
+    device.battery_level = 0;
+    device.voltage = 0.0f;
+    store.updateDeviceMetrics(0x12345678, device);
+    list.sync(store, index, 0x12345678, 1700000000U, context);
+    harness.pump();
+    CHECK(labelText(row, 4).empty());
+}
+
 TEST_CASE("VirtualNodeList renders legacy role and unmessagable icons from the record")
 {
     MuiTestHarness harness;
@@ -335,6 +387,7 @@ TEST_CASE("VirtualNodeList matches legacy event-driven row text and distance pre
 {
     MuiTestHarness legacy;
     legacy.resetNodeList();
+    legacy.enableVirtualNodeModelFixture();
     legacy.setCurrentTime(1700000000U);
 
     constexpr NodeId ownNode = 0xaaaa0001;
@@ -371,6 +424,7 @@ TEST_CASE("VirtualNodeList matches legacy signal label event order")
     {
         MuiTestHarness signalThenHops;
         signalThenHops.resetNodeList();
+        signalThenHops.enableVirtualNodeModelFixture();
         signalThenHops.setCurrentTime(1700000000U);
         signalThenHops.addNodeFixture(0x11111111, "SIG1", "Signal Then Hops", 1699999900U);
         signalThenHops.updateSignalFixture(0x11111111, -80, 4.2f);
@@ -383,6 +437,7 @@ TEST_CASE("VirtualNodeList matches legacy signal label event order")
     {
         MuiTestHarness hopsThenSignal;
         hopsThenSignal.resetNodeList();
+        hopsThenSignal.enableVirtualNodeModelFixture();
         hopsThenSignal.setCurrentTime(1700000000U);
         hopsThenSignal.addNodeFixture(0x22222222, "SIG2", "Hops Then Signal", 1699999900U);
         hopsThenSignal.updateHopsFixture(0x22222222, 4);
@@ -390,6 +445,7 @@ TEST_CASE("VirtualNodeList matches legacy signal label event order")
 
         CHECK(syncVirtualSnapshotFromLegacy(hopsThenSignal, 0x22222222).signal ==
               hopsThenSignal.legacyRowSnapshot(0x22222222).signal);
+        CHECK(hopsThenSignal.nodeHops(0x22222222) == 0);
     }
 }
 
@@ -397,6 +453,7 @@ TEST_CASE("VirtualNodeList matches legacy icon style and short-name fallback aft
 {
     MuiTestHarness legacy;
     legacy.resetNodeList();
+    legacy.enableVirtualNodeModelFixture();
     legacy.setCurrentTime(1700000000U);
 
     constexpr NodeId noKeyRouter = 0x11112222;
@@ -461,6 +518,7 @@ TEST_CASE("VirtualNodeList resets pooled image recolor when a row is rebound aft
 {
     MuiTestHarness legacy;
     legacy.resetNodeList();
+    legacy.enableVirtualNodeModelFixture();
 
     lv_obj_t *virtualRoot = lv_obj_create(lv_screen_active());
     lv_obj_set_size(virtualRoot, 320, 240);
@@ -493,6 +551,7 @@ TEST_CASE("VirtualNodeList resets pooled image recolor when a row is rebound aft
 
         constexpr NodeId darkNormal = 0x00000001;
         legacy.resetNodeList();
+        legacy.enableVirtualNodeModelFixture();
         legacy.addNodeFixture(darkNormal, "DRK1", "Fresh Dark Normal", 1699999900U, MeshtasticView::client, true, false, 0);
         freshDarkNormal = legacy.legacyRowSnapshot(darkNormal);
         lv_obj_t *darkRow = syncCurrentLegacy(darkNormal);
@@ -501,6 +560,7 @@ TEST_CASE("VirtualNodeList resets pooled image recolor when a row is rebound aft
 
         constexpr NodeId blockedSecond = 0x5555a002;
         legacy.resetNodeList();
+        legacy.enableVirtualNodeModelFixture();
         legacy.addNodeFixture(blockedSecond, "BLK2", "Blocked Prime Again", 1699999900U, MeshtasticView::client, true, true, 0);
         lv_obj_t *blockedRow = syncCurrentLegacy(blockedSecond);
         CHECK(blockedRow == pooledRow);
@@ -508,6 +568,7 @@ TEST_CASE("VirtualNodeList resets pooled image recolor when a row is rebound aft
 
         constexpr NodeId brightRouter = 0x00fefefe;
         legacy.resetNodeList();
+        legacy.enableVirtualNodeModelFixture();
         legacy.addNodeFixture(brightRouter, "BRT1", "Fresh Bright Router", 1699999900U, MeshtasticView::router, true, false, 0);
         freshBrightRouter = legacy.legacyRowSnapshot(brightRouter);
         lv_obj_t *brightRow = syncCurrentLegacy(brightRouter);

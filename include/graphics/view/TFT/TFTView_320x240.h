@@ -147,6 +147,8 @@ class TFTView_320x240 : public MeshtasticView
     void scrollVirtualNodeForTesting(NodeId id);
     lv_group_t *virtualNodeListNavigationGroupForTesting() const;
     void enableVirtualNodeListForTesting();
+    void enableVirtualNodeModelForTesting();
+    void setActiveChatForTesting(NodeId id, bool active);
     void setOfflineFilterForTesting(bool enabled);
     void setPositionFilterForTesting(bool enabled);
     bool virtualNodeListEnabledForTesting() const;
@@ -305,6 +307,7 @@ class TFTView_320x240 : public MeshtasticView
     NodeListFilter currentNodeListFilter(void) const;
     void syncVisibleNodeIndex(void);
     void syncNodeListPresentation(void);
+    bool shouldMaintainNodeModel(void) const;
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
     void ensureVirtualNodeList(void);
     void nodeClicked(NodeId id) override;
@@ -553,5 +556,6 @@ class TFTView_320x240 : public MeshtasticView
     lv_obj_t *virtualNodeListHost = nullptr;
     std::unique_ptr<VirtualNodeList> virtualNodeList;
     bool useVirtualNodeList = false;
+    bool nodeModelEnabled = false;
 #endif
 };

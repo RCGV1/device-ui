@@ -80,8 +80,10 @@ class MuiTestHarness
     void updateHopsFixture(uint32_t nodeId, uint8_t hops);
     void updateLastHeardFixture(uint32_t nodeId);
     void addActiveChatFixture(uint32_t nodeId, uint8_t channel = 0);
+    void setActiveChatModelFixture(uint32_t nodeId, bool active = true);
     void toggleResyncPresentationFixture();
     void enableVirtualNodeListFixture();
+    void enableVirtualNodeModelFixture();
     void configureInputDevicesFixture(bool keyboard, bool encoder, bool pointer);
     void setOfflineFilterFixture(bool enabled);
     void setPositionFilterFixture(bool enabled);

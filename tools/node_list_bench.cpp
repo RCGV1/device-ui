@@ -153,7 +153,7 @@ void applyMixedState(MuiTestHarness &harness, const std::vector<NodeFixture> &fi
         }
     }
     if (!fixtures.empty()) {
-        harness.addActiveChatFixture(fixtures.front().id, fixtures.front().channel);
+        harness.setActiveChatModelFixture(fixtures.front().id);
     }
     harness.pump();
 }
@@ -833,6 +833,7 @@ NodeListBenchmarkReport runNodeListBenchmark(const NodeListBenchmarkOptions &opt
         allocatorTrial.warmup = iteration < options.warmup;
         auto fixtures = makeFixtures(options.nodes, options.seed, iteration);
         harness.resetNodeList();
+        harness.enableVirtualNodeModelFixture();
         harness.setCurrentTime(1700000000U);
 
         auto ordered = fixtures;
@@ -842,6 +843,7 @@ NodeListBenchmarkReport runNodeListBenchmark(const NodeListBenchmarkOptions &opt
         harness.showNodesScreen();
         harness.pump(50);
         applyMixedState(harness, fixtures);
+        harness.pump(500);
         allocatorTrial.before = captureAllocatorSnapshot();
         allocatorTrial.peak = allocatorTrial.before;
         captureTerminalBefore(allocatorTrial, harness, harness.legacyRetainedNodeCount(), harness.store().size(),
@@ -943,14 +945,25 @@ NodeListBenchmarkReport runNodeListBenchmark(const NodeListBenchmarkOptions &opt
                 const uint32_t purgeId = harness.nodePurgeCandidate(extra.id);
                 capPurgeOk = capPurgeOk && purgeId != 0;
                 if (purgeId != 0) {
+                    auto purgedFixture = std::find_if(fixtures.begin(), fixtures.end(),
+                                                      [&](const auto &fixture) { return fixture.id == purgeId; });
+                    if (purgedFixture != fixtures.end()) {
+                        extra.hasPosition = purgedFixture->hasPosition;
+                        extra.hasTelemetry = purgedFixture->hasTelemetry;
+                    }
                     if (options.nodes < 250) {
                         harness.purgeLegacyNode(extra.id);
                     }
                     harness.addNodeFixture(extra.id, extra.shortName.c_str(), extra.longName.c_str(), extra.lastHeard, extra.role,
                                            extra.hasKey, extra.unmessagable, extra.channel);
+                    harness.updateHopsFixture(extra.id, 1);
+                    if (extra.hasPosition) {
+                        harness.updatePositionFixture(extra.id, 374221234, -1220845678, 10, 7, 16);
+                    }
+                    if (extra.hasTelemetry) {
+                        harness.updateTelemetryFixture(extra.id, 20.0F, 45.0F, 1013.2F, 50);
+                    }
                     harness.pump();
-                    auto purgedFixture = std::find_if(fixtures.begin(), fixtures.end(),
-                                                      [&](const auto &fixture) { return fixture.id == purgeId; });
                     if (purgedFixture != fixtures.end()) {
                         *purgedFixture = extra;
                     }

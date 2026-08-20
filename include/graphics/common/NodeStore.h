@@ -26,9 +26,11 @@ struct NodeRecord {
     bool hasUser = false;
     meshtastic_User user{};
     bool hasKey = false;
+    bool hasBadKey = false;
     bool unmessagable = false;
     bool viaMqtt = false;
     uint32_t lastHeard = 0;
+    uint64_t recencyOrder = 0;
     int32_t rssi = 0;
     float snr = 0;
     int8_t hopsAway = -1;
@@ -86,6 +88,7 @@ class NodeStore
     NodeMutation updateSignal(NodeId id, int32_t rssi, float snr);
     NodeMutation updateHops(NodeId id, int8_t hopsAway);
     NodeMutation updateLastHeard(NodeId id, uint32_t now);
+    NodeMutation markBadKey(NodeId id);
     NodeMutation setActiveChat(NodeId id, bool active);
     NodeMutation remove(NodeId id);
 
@@ -93,5 +96,8 @@ class NodeStore
     NodeId selectPurgeCandidate(NodeId incoming, NodeId ownNode, uint32_t now) const;
 
   private:
+    void touchRecency(NodeRecord &record);
+
     Records nodes;
+    uint64_t nextRecencyOrder = 1;
 };

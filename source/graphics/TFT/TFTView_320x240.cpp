@@ -155,7 +155,7 @@ uint8_t TFTView_320x240::nodeChannel(NodeId id) const
 bool TFTView_320x240::nodeHasKey(NodeId id) const
 {
     const NodeRecord *record = nodeStore.find(id);
-    return record && record->hasKey;
+    return record && record->hasKey && !record->hasBadKey;
 }
 
 int8_t TFTView_320x240::nodeHops(NodeId id) const
@@ -184,6 +184,21 @@ NodePosition TFTView_320x240::nodePosition(NodeId id) const
 
 NodeId TFTView_320x240::nodePurgeCandidate(NodeId incoming) const
 {
+    if (!shouldMaintainNodeModel()) {
+        uint32_t oldest = 0;
+        uint32_t oldestLastHeard = UINT32_MAX;
+        for (const auto &entry : nodes) {
+            if (entry.first == incoming || entry.first == ownNode || chats.find(entry.first) != chats.end() || !entry.second)
+                continue;
+            const uint32_t lastHeard =
+                static_cast<uint32_t>(reinterpret_cast<uintptr_t>(entry.second->LV_OBJ_IDX(node_lh_idx)->user_data));
+            if (!oldest || lastHeard < oldestLastHeard || (lastHeard == oldestLastHeard && entry.first < oldest)) {
+                oldest = entry.first;
+                oldestLastHeard = lastHeard;
+            }
+        }
+        return oldest;
+    }
     return nodeStore.selectPurgeCandidate(incoming, ownNode, static_cast<uint32_t>(curtime));
 }
 
@@ -292,6 +307,7 @@ void TFTView_320x240::resetNodeListForTesting(void)
     visibleNodes = VisibleNodeIndex();
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
     useVirtualNodeList = false;
+    nodeModelEnabled = false;
     if (virtualNodeList) {
         virtualNodeList.reset();
     }
@@ -548,9 +564,26 @@ lv_group_t *TFTView_320x240::virtualNodeListNavigationGroupForTesting() const
 void TFTView_320x240::enableVirtualNodeListForTesting()
 {
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    nodeModelEnabled = true;
     useVirtualNodeList = true;
     syncNodeListPresentation();
 #endif
+}
+
+void TFTView_320x240::enableVirtualNodeModelForTesting()
+{
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    nodeModelEnabled = true;
+    syncNodeListPresentation();
+#endif
+}
+
+void TFTView_320x240::setActiveChatForTesting(NodeId id, bool active)
+{
+    if (shouldMaintainNodeModel()) {
+        nodeStore.setActiveChat(id, active);
+        syncNodeListPresentation();
+    }
 }
 
 void TFTView_320x240::setOfflineFilterForTesting(bool enabled)
@@ -3500,8 +3533,18 @@ void TFTView_320x240::ui_event_trace_route_node(lv_event_t *e)
     uint32_t nodeNum = (unsigned long)e->user_data;
     lv_obj_t *panel = THIS->nodePanel(nodeNum);
     if (panel) {
+        THIS->selectNode(nodeNum);
         THIS->ui_set_active(objects.nodes_button, objects.nodes_panel, objects.top_nodes_panel);
         lv_obj_scroll_to_view(panel, LV_ANIM_ON);
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    } else if (THIS->useVirtualNodeList && THIS->nodeRecord(nodeNum)) {
+        THIS->selectNode(nodeNum);
+        THIS->ui_set_active(objects.nodes_button, objects.nodes_panel, objects.top_nodes_panel);
+        THIS->syncNodeListPresentation();
+        if (THIS->virtualNodeList) {
+            THIS->virtualNodeList->scrollTo(nodeNum, LV_ANIM_ON);
+        }
+#endif
     }
 }
 
@@ -4334,7 +4377,8 @@ void TFTView_320x240::eraseChat(uint32_t channelOrNode)
         lv_obj_del(messages.at(nodeNum));
         messages.erase(nodeNum);
         chats.erase(nodeNum);
-        nodeStore.setActiveChat(nodeNum, false);
+        if (shouldMaintainNodeModel())
+            nodeStore.setActiveChat(nodeNum, false);
         syncNodeListPresentation();
     }
 }
@@ -4351,7 +4395,8 @@ void TFTView_320x240::clearChatHistory(void)
             channelGroup[it.first] = nullptr;
         } else {
             lv_obj_delete(messages[it.first]);
-            nodeStore.setActiveChat(it.first, false);
+            if (shouldMaintainNodeModel())
+                nodeStore.setActiveChat(it.first, false);
         }
     }
     chats.clear();
@@ -5119,13 +5164,21 @@ void TFTView_320x240::addNode(uint32_t nodeNum, uint8_t ch, const char *userShor
     ILOG_DEBUG("addNode(%d): num=0x%08x, lastseen=%d, name=%s(%s), role=%d", nodeCount, nodeNum, lastHeard, userLong, userShort,
                role);
     while (nodeCount >= MAX_NUM_NODES_VIEW) {
+        if (!nodePurgeCandidate(nodeNum))
+            return;
         purgeNode(nodeNum);
     }
 
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
     if (useVirtualNodeList) {
+        if (!nodeStore.find(nodeNum) && nodeStore.size() >= MAX_NUM_NODES_VIEW && !nodePurgeCandidate(nodeNum)) {
+            syncNodeListPresentation();
+            return;
+        }
         while ((!nodeStore.find(nodeNum) && nodeStore.size() >= MAX_NUM_NODES_VIEW) ||
                (nodeStore.find(nodeNum) && nodeStore.size() > MAX_NUM_NODES_VIEW)) {
+            if (!nodePurgeCandidate(nodeNum))
+                break;
             purgeNode(nodeNum);
         }
         if (!nodeStore.find(nodeNum)) {
@@ -5147,7 +5200,7 @@ void TFTView_320x240::addNode(uint32_t nodeNum, uint8_t ch, const char *userShor
     }
 #endif
 
-    if (!nodeStore.find(nodeNum)) {
+    if (shouldMaintainNodeModel() && !nodeStore.find(nodeNum)) {
         meshtastic_User userRecord = meshtastic_User_init_default;
         if (userShort)
             std::strncpy(userRecord.short_name, userShort, sizeof(userRecord.short_name) - 1);
@@ -5372,18 +5425,34 @@ void TFTView_320x240::addOrUpdateNode(uint32_t nodeNum, uint8_t channel, uint32_
                                       bool viaMqtt)
 {
     MeshtasticView::addOrUpdateNode(nodeNum, channel, lastHeard, role, hasKey, viaMqtt);
-    nodeStore.upsertUnknown(nodeNum, channel, lastHeard, static_cast<uint8_t>(role), hasKey, viaMqtt);
-    while (nodeStore.size() > MAX_NUM_NODES_VIEW) {
-        purgeNode(nodeNum);
+    if (shouldMaintainNodeModel()) {
+        if (!nodeStore.find(nodeNum) && nodeStore.size() >= MAX_NUM_NODES_VIEW && !nodePurgeCandidate(nodeNum)) {
+            syncNodeListPresentation();
+            return;
+        }
+        nodeStore.upsertUnknown(nodeNum, channel, lastHeard, static_cast<uint8_t>(role), hasKey, viaMqtt);
+        while (nodeStore.size() > MAX_NUM_NODES_VIEW) {
+            if (!nodePurgeCandidate(nodeNum))
+                break;
+            purgeNode(nodeNum);
+        }
     }
     syncNodeListPresentation();
 }
 
 void TFTView_320x240::addOrUpdateNode(uint32_t nodeNum, uint8_t channel, uint32_t lastHeard, const meshtastic_User &cfg)
 {
-    nodeStore.upsertUser(nodeNum, channel, lastHeard, cfg, false);
-    while (nodeStore.size() > MAX_NUM_NODES_VIEW) {
-        purgeNode(nodeNum);
+    if (shouldMaintainNodeModel()) {
+        if (!nodeStore.find(nodeNum) && nodeStore.size() >= MAX_NUM_NODES_VIEW && !nodePurgeCandidate(nodeNum)) {
+            syncNodeListPresentation();
+            return;
+        }
+        nodeStore.upsertUser(nodeNum, channel, lastHeard, cfg, false);
+        while (nodeStore.size() > MAX_NUM_NODES_VIEW) {
+            if (!nodePurgeCandidate(nodeNum))
+                break;
+            purgeNode(nodeNum);
+        }
     }
     if (nodes.find(nodeNum) == nodes.end()) {
         addNode(nodeNum, channel, cfg.short_name, cfg.long_name, lastHeard, (MeshtasticView::eRole)cfg.role,
@@ -5409,9 +5478,10 @@ void TFTView_320x240::addOrUpdateNode(uint32_t nodeNum, uint8_t channel, uint32_
 //                                  eRole role, bool hasKey, bool viaMqtt)
 void TFTView_320x240::updateNode(uint32_t nodeNum, uint8_t ch, const meshtastic_User &cfg)
 {
-    const auto *existing = nodeStore.find(nodeNum);
+    const auto *existing = shouldMaintainNodeModel() ? nodeStore.find(nodeNum) : nullptr;
     uint32_t lh = existing ? existing->lastHeard : curtime;
-    nodeStore.upsertUser(nodeNum, ch, lh, cfg, false);
+    if (shouldMaintainNodeModel())
+        nodeStore.upsertUser(nodeNum, ch, lh, cfg, false);
     db.user = cfg;
     auto it = nodes.find(nodeNum);
     if (it != nodes.end() && it->second) {
@@ -5475,7 +5545,8 @@ void TFTView_320x240::updateNode(uint32_t nodeNum, uint8_t ch, const meshtastic_
 
 void TFTView_320x240::updatePosition(uint32_t nodeNum, int32_t lat, int32_t lon, int32_t alt, uint32_t sats, uint32_t precision)
 {
-    nodeStore.updatePosition(nodeNum, {true, lat, lon, alt, sats, precision});
+    if (shouldMaintainNodeModel())
+        nodeStore.updatePosition(nodeNum, {true, lat, lon, alt, sats, precision});
     int32_t altU = abs(alt) < 10000 ? alt : 0;
     char units[3] = {};
     if (db.config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_METRIC) {
@@ -5614,7 +5685,8 @@ void TFTView_320x240::updateMetrics(uint32_t nodeNum, uint32_t bat_level, float 
     devMetrics.voltage = voltage;
     devMetrics.channel_utilization = chUtil;
     devMetrics.air_util_tx = airUtil;
-    nodeStore.updateDeviceMetrics(nodeNum, devMetrics);
+    if (shouldMaintainNodeModel())
+        nodeStore.updateDeviceMetrics(nodeNum, devMetrics);
 
     auto it = nodes.find(nodeNum);
     if (it != nodes.end()) {
@@ -5684,7 +5756,8 @@ void TFTView_320x240::updateMetrics(uint32_t nodeNum, uint32_t bat_level, float 
 
 void TFTView_320x240::updateEnvironmentMetrics(uint32_t nodeNum, const meshtastic_EnvironmentMetrics &metrics)
 {
-    nodeStore.updateEnvironmentMetrics(nodeNum, metrics);
+    if (shouldMaintainNodeModel())
+        nodeStore.updateEnvironmentMetrics(nodeNum, metrics);
     auto it = nodes.find(nodeNum);
     if (it != nodes.end()) {
         char buf[50];
@@ -5719,7 +5792,8 @@ void TFTView_320x240::updateEnvironmentMetrics(uint32_t nodeNum, const meshtasti
 
 void TFTView_320x240::updateAirQualityMetrics(uint32_t nodeNum, const meshtastic_AirQualityMetrics &metrics)
 {
-    nodeStore.updateAirQualityMetrics(nodeNum, metrics);
+    if (shouldMaintainNodeModel())
+        nodeStore.updateAirQualityMetrics(nodeNum, metrics);
     auto it = nodes.find(nodeNum);
     if (it != nodes.end() && it->first != ownNode) {
         // TODO
@@ -5747,7 +5821,8 @@ void TFTView_320x240::updatePowerMetrics(uint32_t nodeNum, const meshtastic_Powe
  */
 void TFTView_320x240::updateSignalStrength(uint32_t nodeNum, int32_t rssi, float snr)
 {
-    nodeStore.updateSignal(nodeNum, rssi, snr);
+    if (shouldMaintainNodeModel())
+        nodeStore.updateSignal(nodeNum, rssi, snr);
     if (nodeNum != ownNode) {
         auto it = nodes.find(nodeNum);
         if (it != nodes.end()) {
@@ -5767,7 +5842,8 @@ void TFTView_320x240::updateSignalStrength(uint32_t nodeNum, int32_t rssi, float
 
 void TFTView_320x240::updateHopsAway(uint32_t nodeNum, uint8_t hopsAway)
 {
-    nodeStore.updateHops(nodeNum, hopsAway);
+    if (shouldMaintainNodeModel())
+        nodeStore.updateHops(nodeNum, hopsAway);
     if (nodeNum != ownNode) {
         auto it = nodes.find(nodeNum);
         if (it != nodes.end()) {
@@ -5940,6 +6016,8 @@ void TFTView_320x240::handleResponse(uint32_t from, const uint32_t id, const mes
                 // we probably have a wrong key; mark it as bad and don't use in future
                 if (nodeHasKey(from)) {
                     ILOG_DEBUG("public key mismatch");
+                    if (shouldMaintainNodeModel())
+                        nodeStore.markBadKey(from);
                     lv_obj_t *panel = nodePanel(from);
                     if (panel) {
                         panel->LV_OBJ_IDX(node_bat_idx)->user_data = (void *)2;
@@ -6091,7 +6169,7 @@ void TFTView_320x240::addNodeToTraceRoute(uint32_t nodeNum, lv_obj_t *panel)
             lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL);
             if (record) {
                 if (nodeNum != ownNode) {
-                    if (panelForNode)
+                    if (panelForNode || useVirtualNodeList)
                         lv_obj_add_event_cb(btn, ui_event_trace_route_node, LV_EVENT_CLICKED,
                                             traceRouteNodeCallbackUserData(nodeNum));
                     lv_label_set_text(label, nodeShortName(nodeNum) ? nodeShortName(nodeNum) : "");
@@ -6185,7 +6263,8 @@ void TFTView_320x240::purgeNode(uint32_t nodeNum)
     }
     removeFromMap(oldest);
     nodes.erase(oldest);
-    nodeStore.remove(oldest);
+    if (shouldMaintainNodeModel())
+        nodeStore.remove(oldest);
     nodeCount--;
     nodesChanged = true; // flag to force re-apply node filter
     syncNodeListPresentation();
@@ -7263,7 +7342,8 @@ void TFTView_320x240::addChat(uint32_t from, uint32_t to, uint8_t ch)
         return;
 
     if (index >= c_max_channels)
-        nodeStore.setActiveChat(index, true);
+        if (shouldMaintainNodeModel())
+            nodeStore.setActiveChat(index, true);
     syncNodeListPresentation();
 
     lv_obj_t *chatDelBtn = nullptr;
@@ -7708,8 +7788,20 @@ void TFTView_320x240::syncVisibleNodeIndex(void)
     visibleNodes.rebuild(nodeStore, currentNodeListFilter(), ownNode, NodeListFilterPolicy::LegacyCompatible);
 }
 
+bool TFTView_320x240::shouldMaintainNodeModel(void) const
+{
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    return nodeModelEnabled || useVirtualNodeList;
+#else
+    return true;
+#endif
+}
+
 void TFTView_320x240::syncNodeListPresentation(void)
 {
+    if (!shouldMaintainNodeModel()) {
+        return;
+    }
     syncVisibleNodeIndex();
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
     if (!useVirtualNodeList) {
@@ -7827,7 +7919,8 @@ void TFTView_320x240::nodePositionClicked(NodeId id)
 
 void TFTView_320x240::removeNode(uint32_t nodeNum)
 {
-    nodeStore.remove(nodeNum);
+    if (shouldMaintainNodeModel())
+        nodeStore.remove(nodeNum);
     syncNodeListPresentation();
     auto it = nodes.find(nodeNum);
     if (it != nodes.end()) {
@@ -7933,7 +8026,8 @@ void TFTView_320x240::updateNodesFiltered(bool reset)
  */
 void TFTView_320x240::updateLastHeard(uint32_t nodeNum)
 {
-    nodeStore.updateLastHeard(nodeNum, curtime);
+    if (shouldMaintainNodeModel())
+        nodeStore.updateLastHeard(nodeNum, curtime);
     auto it = nodes.find(nodeNum);
     if (it != nodes.end() && it->second) {
         time_t lastHeard = (time_t)it->second->LV_OBJ_IDX(node_lh_idx)->user_data;

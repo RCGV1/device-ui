@@ -10,6 +10,11 @@ namespace
 {
 constexpr uint32_t purgeFreshnessSeconds = 120;
 
+uint32_t effectiveLastHeard(const NodeRecord &record, uint32_t now)
+{
+    return record.lastHeard > now ? now : record.lastHeard;
+}
+
 bool sameUser(const meshtastic_User &left, const meshtastic_User &right)
 {
     return std::strcmp(left.id, right.id) == 0 && std::strcmp(left.long_name, right.long_name) == 0 &&
@@ -48,6 +53,11 @@ const NodeRecord *NodeStore::find(NodeId id) const
     return it == nodes.end() ? nullptr : &it->second;
 }
 
+void NodeStore::touchRecency(NodeRecord &record)
+{
+    record.recencyOrder = nextRecencyOrder++;
+}
+
 NodeMutation NodeStore::upsertUser(NodeId id, uint8_t channel, uint32_t lastHeard, const meshtastic_User &user, bool viaMqtt)
 {
     auto [it, inserted] = nodes.try_emplace(id);
@@ -71,6 +81,7 @@ NodeMutation NodeStore::upsertUser(NodeId id, uint8_t channel, uint32_t lastHear
     const bool unmessagable = user.has_is_unmessagable && user.is_unmessagable;
     if (record.hasKey != hasKey || record.unmessagable != unmessagable || record.viaMqtt != viaMqtt) {
         record.hasKey = hasKey;
+        record.hasBadKey = false;
         record.unmessagable = unmessagable;
         record.viaMqtt = viaMqtt;
         changed |= NodeFieldFlags;
@@ -110,6 +121,7 @@ NodeMutation NodeStore::upsertUnknown(NodeId id, uint8_t channel, uint32_t lastH
     }
     if (record.hasKey != hasKey || record.unmessagable || record.viaMqtt != viaMqtt) {
         record.hasKey = hasKey;
+        record.hasBadKey = false;
         record.unmessagable = false;
         record.viaMqtt = viaMqtt;
         changed |= NodeFieldFlags;
@@ -172,14 +184,15 @@ NodeMutation NodeStore::updateSignal(NodeId id, int32_t rssi, float snr)
     auto it = nodes.find(id);
     if (it == nodes.end())
         return unchanged(id);
-    const bool changed =
-        it->second.rssi != rssi || it->second.snr != snr || it->second.signalDisplay != NodeSignalDisplayKind::Rssi;
+    const bool changed = it->second.rssi != rssi || it->second.snr != snr || it->second.hopsAway != 0 ||
+                         it->second.signalDisplay != NodeSignalDisplayKind::Rssi;
     it->second.rssi = rssi;
     it->second.snr = snr;
+    it->second.hopsAway = 0;
     it->second.signalDisplay = NodeSignalDisplayKind::Rssi;
     if (!changed)
         return unchanged(id);
-    return updated(id, NodeFieldSignal);
+    return updated(id, NodeFieldSignal | NodeFieldHops);
 }
 
 NodeMutation NodeStore::updateHops(NodeId id, int8_t hopsAway)
@@ -198,10 +211,24 @@ NodeMutation NodeStore::updateHops(NodeId id, int8_t hopsAway)
 NodeMutation NodeStore::updateLastHeard(NodeId id, uint32_t now)
 {
     auto it = nodes.find(id);
-    if (it == nodes.end() || it->second.lastHeard == now)
+    if (it == nodes.end())
         return unchanged(id);
+    if (it->second.lastHeard == now) {
+        touchRecency(it->second);
+        return updated(id, NodeFieldLastHeard);
+    }
     it->second.lastHeard = now;
+    touchRecency(it->second);
     return updated(id, NodeFieldLastHeard);
+}
+
+NodeMutation NodeStore::markBadKey(NodeId id)
+{
+    auto it = nodes.find(id);
+    if (it == nodes.end() || it->second.hasBadKey)
+        return unchanged(id);
+    it->second.hasBadKey = true;
+    return updated(id, NodeFieldFlags);
 }
 
 NodeMutation NodeStore::setActiveChat(NodeId id, bool active)
@@ -234,8 +261,14 @@ NodeId NodeStore::selectPurgeCandidate(NodeId incoming, NodeId ownNode, uint32_t
     ordered.reserve(nodes.size());
     for (const auto &[id, record] : nodes)
         ordered.push_back(&record);
-    std::sort(ordered.begin(), ordered.end(), [](const NodeRecord *left, const NodeRecord *right) {
-        return left->lastHeard == right->lastHeard ? left->id < right->id : left->lastHeard < right->lastHeard;
+    std::sort(ordered.begin(), ordered.end(), [now](const NodeRecord *left, const NodeRecord *right) {
+        const uint32_t leftHeard = effectiveLastHeard(*left, now);
+        const uint32_t rightHeard = effectiveLastHeard(*right, now);
+        if (leftHeard != rightHeard)
+            return leftHeard < rightHeard;
+        if (left->recencyOrder != right->recencyOrder)
+            return left->recencyOrder < right->recencyOrder;
+        return left->id < right->id;
     });
 
     const auto removable = [incoming, ownNode](const NodeRecord &record) {

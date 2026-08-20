@@ -124,14 +124,23 @@ void VisibleNodeIndex::rebuild(const NodeStore &store, const NodeListFilter &fil
         }
     }
 
-    // Sort by lastHeard descending, tie-breaker: NodeId ascending
-    std::sort(visibleIds.begin(), visibleIds.end(), [&store](NodeId a, NodeId b) {
+    // Sort by effective lastHeard descending, then newest same-second mutation first.
+    std::sort(visibleIds.begin(), visibleIds.end(), [&store, now = filter.curTime](NodeId a, NodeId b) {
         const auto *recA = store.find(a);
         const auto *recB = store.find(b);
         uint32_t lhA = recA ? recA->lastHeard : 0;
         uint32_t lhB = recB ? recB->lastHeard : 0;
+        if (now != 0) {
+            lhA = lhA > now ? now : lhA;
+            lhB = lhB > now ? now : lhB;
+        }
         if (lhA != lhB) {
             return lhA > lhB;
+        }
+        uint64_t recencyA = recA ? recA->recencyOrder : 0;
+        uint64_t recencyB = recB ? recB->recencyOrder : 0;
+        if (recencyA != recencyB) {
+            return recencyA > recencyB;
         }
         return a < b;
     });

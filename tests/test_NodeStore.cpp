@@ -131,6 +131,23 @@ TEST_CASE("node store updates position telemetry and radio fields on an existing
     CHECK(record.hasActiveChat);
 }
 
+TEST_CASE("node store treats RSSI after hops as direct and records bad PKI keys")
+{
+    NodeStore store;
+    store.upsertUser(7, 0, 10, makeUser("NODE", "Node"), false);
+
+    store.updateHops(7, 4);
+    auto signal = store.updateSignal(7, -87, 6.25f);
+    REQUIRE(store.find(7) != nullptr);
+    CHECK((signal.changedFields & NodeFieldHops) != 0U);
+    CHECK(store.find(7)->hopsAway == 0);
+    CHECK(store.find(7)->signalDisplay == NodeSignalDisplayKind::Rssi);
+
+    CHECK(store.markBadKey(7).kind == NodeMutationKind::Updated);
+    CHECK(store.find(7)->hasBadKey);
+    CHECK(store.markBadKey(7).kind == NodeMutationKind::Unchanged);
+}
+
 TEST_CASE("node store field updates do not create incomplete nodes")
 {
     NodeStore store;

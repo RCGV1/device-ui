@@ -7,6 +7,7 @@ TEST_CASE("node semantic helpers read model fields instead of retained legacy pa
 {
     MuiTestHarness harness;
     harness.resetNodeList();
+    harness.enableVirtualNodeModelFixture();
     harness.setLoRaHopLimit(7);
 
     harness.addNodeFixture(0x1234abcd, "MODL", "Model Node", 1000, MeshtasticView::router, true, false, 3);
@@ -48,6 +49,7 @@ TEST_CASE("active direct chats protect model purge candidate selection")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
+    harness.enableVirtualNodeModelFixture();
     harness.setCurrentTime(1000);
 
     harness.addUnknownNodeFixture(0x10101010, 0, 100, static_cast<uint8_t>(MeshtasticView::unknown), false, false);
@@ -62,6 +64,7 @@ TEST_CASE("legacy action callbacks use NodeId model semantics after panel corrup
 {
     MuiTestHarness harness;
     harness.resetNodeList();
+    harness.enableVirtualNodeModelFixture();
     harness.setLoRaHopLimit(7);
 
     harness.addNodeFixture(0x1234abcd, "MODL", "Model Node", 1000, MeshtasticView::router, true, false, 3);
@@ -99,6 +102,7 @@ TEST_CASE("legacy trace-route node callback resolves NodeId at final presentatio
 {
     MuiTestHarness harness;
     harness.resetNodeList();
+    harness.enableVirtualNodeModelFixture();
 
     harness.addNodeFixture(0x1234abcd, "MODL", "Model Node", 1000, MeshtasticView::router, true, false, 3);
     harness.corruptLegacyNodePanel(0x1234abcd);

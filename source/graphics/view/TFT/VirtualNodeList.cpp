@@ -71,6 +71,14 @@ void setRoleImage(const NodeRecord &record, lv_obj_t *img)
     uint32_t fgColor = 0;
     std::tie(bgColor, fgColor) = nodeColor(record.id);
 
+    if (record.hasBadKey) {
+        lv_image_set_src(img, &img_lock_slash_image);
+        lv_obj_set_style_border_color(img, lv_color_hex(0xff5555), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_color(img, lv_color_hex(bgColor), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_image_recolor_opa(img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+        return;
+    }
+
     if (record.unmessagable) {
         lv_image_set_src(img, &img_unmessagable_image);
         lv_obj_set_style_border_color(img, lv_color_hex(bgColor), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -506,7 +514,7 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     lv_obj_set_user_data(row.lblPos1, reinterpret_cast<void *>(static_cast<uintptr_t>(record.id)));
 
     setRoleImage(record, row.img);
-    if (!record.hasKey) {
+    if (!record.hasKey || record.hasBadKey) {
         lv_obj_set_style_border_color(row.img, lv_color_hex(0xff5555), LV_PART_MAIN | LV_STATE_DEFAULT);
     } else if (!record.unmessagable) {
         lv_obj_set_style_border_color(row.img, lv_obj_get_style_bg_color(row.img, LV_PART_MAIN), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -517,9 +525,10 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     lv_obj_set_pos(row.lblShort, 30, std::strchr(row.shortText, '\n') ? -1 : 10);
     setRowText(row.lblLong, row.longText, record.user.long_name);
 
-    if (record.hasDeviceMetrics) {
+    if (record.hasDeviceMetrics && (record.deviceMetrics.battery_level != 0 || record.deviceMetrics.voltage != 0.0f)) {
         std::snprintf(row.batteryText, sizeof(row.batteryText), "%u%% %0.2fV",
-                      static_cast<unsigned int>(record.deviceMetrics.battery_level), record.deviceMetrics.voltage);
+                      static_cast<unsigned int>(std::min<uint32_t>(record.deviceMetrics.battery_level, 100)),
+                      record.deviceMetrics.voltage);
     } else {
         row.batteryText[0] = '\0';
     }
@@ -549,10 +558,15 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     const bool showPosition =
         isExpanded && record.position.known && (record.position.latitude != 0 || record.position.longitude != 0);
     if (showPosition) {
-        const int32_t altitude = std::abs(record.position.altitude) < 10000 ? record.position.altitude : 0;
+        int32_t altitude = std::abs(record.position.altitude) < 10000 ? record.position.altitude : 0;
+        const char *altitudeUnits = "m";
+        if (!renderContext.metricUnits) {
+            altitude = static_cast<int32_t>(static_cast<float>(altitude) * 3.28084f);
+            altitudeUnits = "ft";
+        }
         std::snprintf(row.positionText, sizeof(row.positionText), "%.5f %.5f", record.position.latitude * 1e-7,
                       record.position.longitude * 1e-7);
-        std::snprintf(row.position2Text, sizeof(row.position2Text), "%dm MSL", static_cast<int>(altitude));
+        std::snprintf(row.position2Text, sizeof(row.position2Text), "%d%s MSL", static_cast<int>(altitude), altitudeUnits);
     }
     lv_label_set_text_static(row.lblPos1, row.positionText);
     lv_label_set_text_static(row.lblPos2, row.position2Text);
@@ -562,12 +576,19 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     const bool showTelemetry1 = isExpanded && record.hasEnvironmentMetrics;
     if (showTelemetry1) {
         const auto &metrics = record.environmentMetrics;
-        if (static_cast<int>(metrics.relative_humidity) > 0) {
+        if (renderContext.metricUnits && static_cast<int>(metrics.relative_humidity) > 0) {
             std::snprintf(row.telemetry1Text, sizeof(row.telemetry1Text), "%2.1f°C %d%% %3.1fhPa", metrics.temperature,
                           static_cast<int>(metrics.relative_humidity), metrics.barometric_pressure);
-        } else {
+        } else if (renderContext.metricUnits) {
             std::snprintf(row.telemetry1Text, sizeof(row.telemetry1Text), "%2.1f°C %3.1fhPa", metrics.temperature,
                           metrics.barometric_pressure);
+        } else if (static_cast<int>(metrics.relative_humidity) > 0) {
+            std::snprintf(row.telemetry1Text, sizeof(row.telemetry1Text), "%2.1f°F %d%% %3.1finHg",
+                          metrics.temperature * 9 / 5 + 32, static_cast<int>(metrics.relative_humidity),
+                          metrics.barometric_pressure / 33.86f);
+        } else {
+            std::snprintf(row.telemetry1Text, sizeof(row.telemetry1Text), "%2.1f°F %3.1finHg", metrics.temperature * 9 / 5 + 32,
+                          metrics.barometric_pressure / 33.86f);
         }
     }
     lv_label_set_text_static(row.lblTm1, row.telemetry1Text);

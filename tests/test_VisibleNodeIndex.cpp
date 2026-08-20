@@ -204,3 +204,38 @@ TEST_CASE("visible index preserves stable selection lookup after last-heard reor
     CHECK(index.indexOf(0x3333) == std::optional<size_t>(2));
     CHECK(index.indexOf(0x9999) == std::nullopt);
 }
+
+TEST_CASE("visible index promotes same-second last-heard refreshes ahead of older ties")
+{
+    NodeStore store;
+    store.upsertUser(0x9000, 0, 500, makeUser("!00009000", "High Id", "HIGH"), false);
+    store.upsertUser(0x1000, 0, 500, makeUser("!00001000", "Low Id", "LOW"), false);
+
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    REQUIRE(index.ids().size() == 2);
+    CHECK(index.ids()[0] == 0x1000);
+
+    store.updateLastHeard(0x9000, 500);
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+
+    CHECK(index.ids()[0] == 0x9000);
+    CHECK(index.ids()[1] == 0x1000);
+}
+
+TEST_CASE("visible index clamps future last-heard timestamps before ordering")
+{
+    NodeStore store;
+    store.upsertUser(0x9000, 0, 2000, makeUser("!00009000", "Future High Id", "FUTR"), false);
+    store.upsertUser(0x1000, 0, 1000, makeUser("!00001000", "Current Low Id", "CURR"), false);
+
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    filter.curTime = 1000;
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+
+    REQUIRE(index.ids().size() == 2);
+    CHECK(index.ids()[0] == 0x1000);
+    CHECK(index.ids()[1] == 0x9000);
+}

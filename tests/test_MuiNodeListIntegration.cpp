@@ -56,6 +56,7 @@ TEST_CASE("view updates model fields before rendering a current row")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
+    harness.enableVirtualNodeModelFixture();
 
     harness.addNodeFixture(0x12345678, "ALPH", "Alpha Node", 1000, 0, true, false, 1);
     const auto *node = harness.node(0x12345678);
@@ -97,6 +98,7 @@ TEST_CASE("node model tracks removals and store purge integrity")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
+    harness.enableVirtualNodeModelFixture();
 
     harness.addNodeFixture(0x0001, "N1", "Node 1", 100);
     harness.addNodeFixture(0x0002, "N2", "Node 2", 200);
@@ -113,6 +115,7 @@ TEST_CASE("unknown ingress keeps model identity and MQTT provenance")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
+    harness.enableVirtualNodeModelFixture();
 
     harness.addUnknownNodeFixture(0x1234abcd, 3, 1000, static_cast<uint8_t>(MeshtasticView::unknown), false, true);
 
@@ -129,6 +132,7 @@ TEST_CASE("last-heard updates keep the model in sync with the node row")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
+    harness.enableVirtualNodeModelFixture();
     harness.addNodeFixture(0x12345678, "ALPH", "Alpha Node", 100);
     harness.setCurrentTime(900);
 
@@ -148,12 +152,15 @@ TEST_CASE("default node list keeps retained legacy rows as the production path")
     CHECK_FALSE(harness.virtualNodeListEnabled());
     CHECK(harness.legacyRetainedNodeCount() == 25);
     CHECK(harness.renderedNodeCount() == 25);
+    CHECK(harness.store().size() == 0);
+    CHECK(harness.visibleIndex().size() == 0);
 }
 
 TEST_CASE("visible node index resyncs after retained model mutations")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
+    harness.enableVirtualNodeModelFixture();
     harness.setCurrentTime(1700000000U);
 
     SUBCASE("insertion")
@@ -466,6 +473,23 @@ TEST_CASE("gated virtual node list scan and traceroute route by selected NodeId"
     CHECK(trace.hopLimit == 3);
 }
 
+TEST_CASE("gated virtual trace-route result callbacks reopen nodes by model NodeId")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.enableVirtualNodeListFixture();
+    harness.setCurrentTime(1700000000U);
+
+    harness.addNodeFixture(0x11111111, "ONE", "One Node", 1699999900U, MeshtasticView::router, true, false, 1);
+    harness.showTraceRoute();
+    REQUIRE(harness.traceRoutePanelVisible());
+
+    harness.dispatchTraceRouteNodeCallback(0x11111111);
+
+    CHECK(harness.nodesPanelVisible());
+    CHECK(harness.selectedNode() == 0x11111111);
+}
+
 TEST_CASE("gated virtual node list routes expanded position clicks to map by NodeId")
 {
     MuiTestHarness harness;
@@ -706,6 +730,8 @@ TEST_CASE("active direct chats protect purge candidates in legacy and virtual no
         harness.resetNodeList();
         if (virtualMode) {
             harness.enableVirtualNodeListFixture();
+        } else {
+            harness.enableVirtualNodeModelFixture();
         }
         harness.setCurrentTime(1000U);
 
@@ -717,6 +743,32 @@ TEST_CASE("active direct chats protect purge candidates in legacy and virtual no
         CHECK(harness.node(0x10101010) != nullptr);
         CHECK(harness.node(0x20202020) == nullptr);
         CHECK(harness.store().size() == 250);
+    }
+}
+
+TEST_CASE("cap enforcement terminates when every retained node is protected")
+{
+    for (bool virtualMode : {false, true}) {
+        CAPTURE(virtualMode);
+        MuiTestHarness harness;
+        harness.resetNodeList();
+        harness.setCurrentTime(1000U);
+        if (virtualMode) {
+            harness.enableVirtualNodeListFixture();
+        } else {
+            harness.enableVirtualNodeModelFixture();
+        }
+
+        for (uint32_t i = 0; i < 250; ++i) {
+            const uint32_t id = 0xc0000000U + i;
+            harness.addNodeFixture(id, "KEEP", "Protected Node", 1U + i);
+            harness.addActiveChatFixture(id);
+        }
+        harness.addNodeFixture(0xd0000000U, "NEW", "Incoming Node", 2000U);
+
+        CHECK(harness.renderedNodeCount() == 250);
+        CHECK(harness.store().size() == 250);
+        CHECK(harness.node(0xd0000000U) == nullptr);
     }
 }
 #endif

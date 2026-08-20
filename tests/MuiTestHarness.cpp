@@ -175,6 +175,11 @@ void MuiTestHarness::addActiveChatFixture(uint32_t nodeId, uint8_t channel)
     view->newMessage(nodeId, 0, channel, "benchmark", messageTime, true);
 }
 
+void MuiTestHarness::setActiveChatModelFixture(uint32_t nodeId, bool active)
+{
+    view->setActiveChatForTesting(nodeId, active);
+}
+
 void MuiTestHarness::toggleResyncPresentationFixture()
 {
     view->notifyResync(true);
@@ -184,6 +189,11 @@ void MuiTestHarness::toggleResyncPresentationFixture()
 void MuiTestHarness::enableVirtualNodeListFixture()
 {
     view->enableVirtualNodeListForTesting();
+}
+
+void MuiTestHarness::enableVirtualNodeModelFixture()
+{
+    view->enableVirtualNodeModelForTesting();
 }
 
 void MuiTestHarness::configureInputDevicesFixture(bool keyboard, bool encoder, bool pointer)
