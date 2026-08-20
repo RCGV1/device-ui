@@ -191,6 +191,33 @@ int32_t X11MuiSimulator::nodeListScrollYForTesting() const
     return root ? lv_obj_get_scroll_y(root) : 0;
 }
 
+bool X11MuiSimulator::disableNodeListScrollMomentumForTesting()
+{
+    auto *root = harness ? harness->nodeListRootForTesting() : nullptr;
+    if (!root) {
+        return false;
+    }
+    const bool wasEnabled = lv_obj_has_flag(root, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    lv_obj_remove_flag(root, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    return wasEnabled;
+}
+
+void X11MuiSimulator::restoreNodeListScrollMomentumForTesting(bool enabled)
+{
+    auto *root = harness ? harness->nodeListRootForTesting() : nullptr;
+    if (root && enabled) {
+        lv_obj_add_flag(root, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    }
+}
+
+void X11MuiSimulator::stopNodeListScrollForTesting()
+{
+    auto *root = harness ? harness->nodeListRootForTesting() : nullptr;
+    if (root) {
+        lv_obj_stop_scroll_anim(root);
+    }
+}
+
 bool X11MuiSimulator::virtualNodeListEnabledForTesting() const
 {
     return harness && harness->virtualNodeListEnabled();

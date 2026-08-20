@@ -81,16 +81,37 @@ start_xvfb
 wait_for_pair() {
     status=0
     remaining=2
-    while [ \"\${remaining}\" -gt 0 ]; do
-        if wait -n; then
+    check_child() {
+        child_name=\"\$1\"
+        child_pid=\"\$2\"
+        if [ -z \"\${child_pid}\" ]; then
+            return 0
+        fi
+        if jobs -pr | grep -Fx \"\${child_pid}\" >/dev/null 2>&1; then
+            return 0
+        fi
+        if wait \"\${child_pid}\"; then
             child_status=0
         else
             child_status=\$?
         fi
+        if [ \"\${child_name}\" = legacy ]; then
+            legacy_pid=
+        else
+            virtual_pid=
+        fi
         remaining=\$((remaining - 1))
         if [ \"\${child_status}\" -ne 0 ]; then
             status=\"\${child_status}\"
-            break
+            return 1
+        fi
+        return 0
+    }
+    while [ \"\${remaining}\" -gt 0 ]; do
+        check_child legacy \"\${legacy_pid}\" || break
+        check_child virtual \"\${virtual_pid}\" || break
+        if [ \"\${remaining}\" -gt 0 ]; then
+            sleep 0.05
         fi
     done
     if [ \"\${status}\" -ne 0 ]; then
@@ -115,13 +136,22 @@ wait_for_pair
 for report in \"\${legacy_report}\" \"\${virtual_report}\"; do
     test -s \"\${report}\"
     grep -q '^drag_xtest_ok=1$' \"\${report}\"
+    grep -q '^drag_momentum_disabled=1$' \"\${report}\"
     grep -q '^drag_scroll_before=' \"\${report}\"
     grep -q '^drag_scroll_after=' \"\${report}\"
     grep -q '^drag_scroll_changed=1$' \"\${report}\"
     grep -q '^wheel_xtest_ok=1$' \"\${report}\"
+    grep -q '^wheel_input=xtest_button5_mouse_wheel_encoder$' \"\${report}\"
+    grep -q '^wheel_settle_before=' \"\${report}\"
+    grep -q '^wheel_settle_after=' \"\${report}\"
+    grep -q '^wheel_scroll_stable_before=1$' \"\${report}\"
     grep -q '^wheel_scroll_before=' \"\${report}\"
     grep -q '^wheel_scroll_after=' \"\${report}\"
-    grep -q '^wheel_scroll_changed=1$' \"\${report}\"
+    grep -q '^wheel_selected_before=' \"\${report}\"
+    grep -q '^wheel_selected_after=' \"\${report}\"
+    grep -q '^wheel_focus_before=' \"\${report}\"
+    grep -q '^wheel_focus_after=' \"\${report}\"
+    grep -q '^wheel_observable_changed=1$' \"\${report}\"
     grep -q '^click_xtest_ok=1$' \"\${report}\"
     grep -q '^click_selected_before=' \"\${report}\"
     grep -q '^click_selected_after=' \"\${report}\"
@@ -130,9 +160,14 @@ for report in \"\${legacy_report}\" \"\${virtual_report}\"; do
     grep -Eq '^click_target=[1-9][0-9]*$' \"\${report}\"
     grep -q '^click_observable_changed=1$' \"\${report}\"
     grep -q '^key_xtest_ok=1$' \"\${report}\"
+    grep -q '^key_input=xtest_page_down_key$' \"\${report}\"
     grep -q '^key_focus_before=' \"\${report}\"
     grep -q '^key_focus_after=' \"\${report}\"
-    grep -q '^key_focus_changed=1$' \"\${report}\"
+    grep -q '^key_selected_before=' \"\${report}\"
+    grep -q '^key_selected_after=' \"\${report}\"
+    grep -q '^key_scroll_before=' \"\${report}\"
+    grep -q '^key_scroll_after=' \"\${report}\"
+    grep -q '^key_observable_changed=1$' \"\${report}\"
 done
 grep -q '^implementation=legacy$' \"\${legacy_report}\"
 grep -q '^virtual_enabled=0$' \"\${legacy_report}\"

@@ -31,6 +31,9 @@ class X11MuiSimulator
     size_t renderedNodeCountForTesting() const;
     const NodeRecord *nodeForTesting(uint32_t nodeId) const;
     int32_t nodeListScrollYForTesting() const;
+    bool disableNodeListScrollMomentumForTesting();
+    void restoreNodeListScrollMomentumForTesting(bool enabled);
+    void stopNodeListScrollForTesting();
     bool virtualNodeListEnabledForTesting() const;
     uint32_t selectedNodeForTesting() const;
     uintptr_t focusedObjectForTesting() const;

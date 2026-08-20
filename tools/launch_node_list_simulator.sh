@@ -74,6 +74,47 @@ cleanup_children() {
 }
 trap cleanup_children EXIT INT TERM
 
+pid_is_running_job() {
+	local pid="$1"
+	local running_pid
+	while IFS= read -r running_pid; do
+		[[ ${running_pid} == "${pid}" ]] && return 0
+	done < <(jobs -pr)
+	return 1
+}
+
+wait_for_pair_children() {
+	local remaining=${#child_pids[@]}
+	local status=0
+	local child_status=0
+	local index
+	local pid
+	while [[ ${remaining} -gt 0 ]]; do
+		for index in "${!child_pids[@]}"; do
+			pid="${child_pids[index]}"
+			[[ -z ${pid} ]] && continue
+			if pid_is_running_job "${pid}"; then
+				continue
+			fi
+			if wait "${pid}"; then
+				child_status=0
+			else
+				child_status=$?
+			fi
+			child_pids[index]=
+			remaining=$((remaining - 1))
+			if [[ ${child_status} -ne 0 ]]; then
+				status=${child_status}
+				break 2
+			fi
+		done
+		if [[ ${remaining} -gt 0 ]]; then
+			sleep 0.05
+		fi
+	done
+	return "${status}"
+}
+
 case "${process_mode}" in
 legacy)
 	"${build_dir}/bin/mui_node_list_simulator" --implementation legacy "${run_args[@]}"
@@ -87,24 +128,7 @@ pair)
 	"${build_dir}/bin/mui_node_list_simulator" --implementation virtual_candidate "${run_args[@]}" &
 	child_pids+=("$!")
 	status=0
-	remaining=${#child_pids[@]}
-	while [[ ${remaining} -gt 0 ]]; do
-		if wait -n; then
-			child_status=0
-		else
-			child_status=$?
-		fi
-		remaining=$((remaining - 1))
-		if [[ ${child_status} -eq 0 ]]; then
-			:
-		elif [[ ${child_status} -eq 127 ]]; then
-			status=127
-			break
-		else
-			status=${child_status}
-			break
-		fi
-	done
+	wait_for_pair_children || status=$?
 	if [[ ${status} -ne 0 ]]; then
 		trap - EXIT INT TERM
 		terminate_children

@@ -393,11 +393,19 @@ if(ENABLE_DOCTESTS)
                  COMMAND ${CMAKE_COMMAND}
                  -DTESTS_EXECUTABLE=$<TARGET_FILE:tests>
                  -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunMuiX11SimulatorInputTest.cmake)
+        add_test(NAME MuiX11SimulatorNoWaitN
+                 COMMAND ${CMAKE_COMMAND}
+                 -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/AssertMuiX11NoWaitN.cmake)
         if(ENABLE_MUI_VIRTUAL_NODE_LIST)
             add_test(NAME MuiX11SimulatorPairLaunch
                      COMMAND ${CMAKE_COMMAND}
                      -DMUI_NODE_LIST_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator>
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunMuiX11SimulatorPairLaunchTest.cmake)
+            add_test(NAME MuiX11SimulatorWheelRequired
+                     COMMAND ${CMAKE_COMMAND}
+                     -DMUI_NODE_LIST_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator>
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/AssertMuiX11WheelRequired.cmake)
         else()
             add_test(NAME MuiX11SimulatorRejectsVirtualCandidate
                      COMMAND ${CMAKE_COMMAND}

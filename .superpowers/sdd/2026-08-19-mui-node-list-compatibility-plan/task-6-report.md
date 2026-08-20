@@ -98,3 +98,34 @@ Fix-round verification:
 Remaining caveat:
 
 - Build output still contains existing warnings in generated/common UI code. A disposable untracked venv under `.codex/task6-venv` was used only so nanopb could import `google.protobuf`; no untracked build or workspace directories were staged.
+
+## Fix Round 3 Evidence
+
+Review findings addressed:
+
+- Wheel causality: the pair exercise now disables LVGL scroll momentum before the drag proof, calls `lv_obj_stop_scroll_anim()` during settling, records `wheel_settle_before`/`wheel_settle_after`, and requires `wheel_scroll_stable_before=1` before sampling the wheel baseline.
+- Wheel-specific proof: reports now include `wheel_input=xtest_button5_mouse_wheel_encoder`, wheel scroll/selection/focus before/after fields, and `wheel_observable_changed=1`. Legacy X11 reports show wheel scroll movement; virtual-candidate reports show the real X11 Button5 encoder path changes LVGL focus, which is a controlled wheel-specific observable and avoids claiming equal scroll-pixel behavior across implementations.
+- Wheel delivery removal regression: `MuiX11SimulatorWheelRequired` runs the simulator with `DEVICE_UI_X11_SUPPRESS_WHEEL_XTEST=1` and requires the simulator to fail with `wheel_xtest_ok=0`, `wheel_scroll_stable_before=1`, and `wheel_observable_changed=0`.
+- macOS compatibility: `tools/launch_node_list_simulator.sh` and `cmake/RunMuiX11SimulatorPairLaunchTest.cmake` no longer use `wait -n`. Both use Bash-3.2-compatible PID polling over `jobs -pr`, then `wait` the completed PID, fail fast on the first child error, and terminate/reap siblings through retained traps.
+- Shell regression: `MuiX11SimulatorNoWaitN` scans both runtime launch helpers and fails if `wait -n` returns.
+
+TDD RED/GREEN:
+
+- RED: `ctest --test-dir build-task6-red -R 'MuiX11Simulator(NoWaitN|PairLaunch|WheelRequired)' --output-on-failure` failed before the fix because `tools/launch_node_list_simulator.sh` still used `wait -n`, pair reports lacked wheel settle/stability evidence, and suppressing wheel delivery still let the simulator pass.
+- RED: after disabling drag momentum, the pair report exposed that virtual-candidate Button5 did not change scroll (`wheel_scroll_changed=0`), proving the old wheel-scroll assertion was not a valid cross-implementation observable.
+- GREEN: after adding wheel settle/stability fields, wheel focus/selection/scroll observables, the wheel-suppression regression, and portable PID polling, `MuiX11SimulatorNoWaitN`, `MuiX11SimulatorPairLaunch`, and `MuiX11SimulatorWheelRequired` passed together.
+
+Fix-round verification:
+
+- `trunk fmt CMakeLists.txt cmake/AssertMuiX11NoWaitN.cmake cmake/AssertMuiX11WheelRequired.cmake cmake/RunMuiX11SimulatorPairLaunchTest.cmake tests/X11MuiSimulator.cpp tests/X11MuiSimulator.h tools/launch_node_list_simulator.sh tools/mui_node_list_simulator.cpp` passed.
+- `PYTHONPATH=/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task6-venv/lib/python3.14/site-packages cmake --build build-task6-red --target mui_node_list_simulator tests -j4` passed.
+- `PYTHONPATH=/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task6-venv/lib/python3.14/site-packages ctest --test-dir build-task6-red --output-on-failure` passed: 5/5.
+- `PYTHONPATH=/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task6-venv/lib/python3.14/site-packages ctest --test-dir build-task6-red -R 'MuiX11Simulator(Input|PairLaunch|WheelRequired|NoWaitN)' -j2 --output-on-failure` passed: 4/4.
+- `cmake -S . -B build-task6-gateoff -DENABLE_MUI_X11_SIMULATOR=ON -DENABLE_DOCTESTS=ON -DPython_EXECUTABLE=/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task6-venv/bin/python && PYTHONPATH=/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task6-venv/lib/python3.14/site-packages cmake --build build-task6-gateoff --target mui_node_list_simulator tests -j4 && PYTHONPATH=/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task6-venv/lib/python3.14/site-packages ctest --test-dir build-task6-gateoff --output-on-failure` passed: 4/4.
+- `PYTHONPATH=/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task6-venv/lib/python3.14/site-packages DISPLAY=<throwaway Xvfb> tools/launch_node_list_simulator.sh build-task6-red --process-mode pair --nodes 8 --seed 42 --run-for-ms 50` passed.
+- `rg -n "wait -n" tools/launch_node_list_simulator.sh cmake/RunMuiX11SimulatorPairLaunchTest.cmake` returned no matches.
+- `git diff --check` passed.
+
+Remaining caveat:
+
+- Build output still contains existing warnings in generated/common UI code. The virtual wheel path is intentionally reported as a host-relative LVGL focus transition rather than equal scroll-pixel behavior. No standalone UI, hardware, or docs outside this SDD report were changed; untracked build/venv directories remain untracked.
