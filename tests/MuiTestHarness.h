@@ -131,6 +131,9 @@ class MuiTestHarness
     void scrollVirtualNodeIntoView(uint32_t nodeId);
     void focusNextInGroup();
     void focusPreviousInGroup();
+    void focusNextInVirtualGroup();
+    void focusPreviousInVirtualGroup();
+    lv_group_t *virtualNavigationGroup() const;
     void sendActiveText(const char *msg);
     const NodeStore &store() const;
     const VisibleNodeIndex &visibleIndex() const;

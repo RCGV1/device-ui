@@ -531,6 +531,15 @@ void TFTView_320x240::scrollVirtualNodeForTesting(NodeId id)
 #endif
 }
 
+lv_group_t *TFTView_320x240::virtualNodeListNavigationGroupForTesting() const
+{
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    return virtualNodeList ? virtualNodeList->navigationGroup() : nullptr;
+#else
+    return nullptr;
+#endif
+}
+
 void TFTView_320x240::enableVirtualNodeListForTesting()
 {
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
@@ -897,6 +906,7 @@ void TFTView_320x240::ui_set_active(lv_obj_t *b, lv_obj_t *p, lv_obj_t *tp)
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
         if (useVirtualNodeList && activePanel == objects.nodes_panel && virtualNodeListHost) {
             lv_obj_add_flag(virtualNodeListHost, LV_OBJ_FLAG_HIDDEN);
+            setInputGroup();
         }
 #endif
         if (activePanel == objects.messages_panel) {
@@ -945,7 +955,17 @@ void TFTView_320x240::ui_set_active(lv_obj_t *b, lv_obj_t *p, lv_obj_t *tp)
     if (activePanel == objects.messages_panel) {
         lv_group_focus_obj(objects.message_input_area);
     } else if (inputdriver->hasKeyboardDevice() || inputdriver->hasEncoderDevice()) {
-        setGroupFocus(activePanel);
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+        if (useVirtualNodeList && activePanel == objects.nodes_panel && virtualNodeList) {
+            setInputGroup(virtualNodeList->navigationGroup());
+            if (currentNode && visibleNodes.contains(currentNode)) {
+                virtualNodeList->focus(currentNode);
+            } else if (!visibleNodes.ids().empty()) {
+                virtualNodeList->focus(visibleNodes.ids().front());
+            }
+        } else
+#endif
+            setGroupFocus(activePanel);
     }
 
     lv_obj_add_flag(objects.keyboard, LV_OBJ_FLAG_HIDDEN);
@@ -7633,13 +7653,19 @@ void TFTView_320x240::setGroupFocus(lv_obj_t *panel)
  */
 void TFTView_320x240::setInputGroup(void)
 {
-    lv_group_t *group = lv_group_get_default();
+    setInputGroup(lv_group_get_default());
+}
 
-    if (group && inputdriver->hasKeyboardDevice())
+void TFTView_320x240::setInputGroup(lv_group_t *group)
+{
+    if (inputdriver->hasKeyboardDevice())
         lv_indev_set_group(inputdriver->getKeyboard(), group);
 
-    if (group && inputdriver->hasPointerDevice())
+    if (inputdriver->hasPointerDevice())
         lv_indev_set_group(inputdriver->getPointer(), group);
+
+    if (inputdriver->hasEncoderDevice())
+        lv_indev_set_group(inputdriver->getEncoder(), group);
 }
 
 void TFTView_320x240::setInputButtonLabel(void)

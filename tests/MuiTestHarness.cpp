@@ -558,6 +558,23 @@ void MuiTestHarness::focusPreviousInGroup()
     pump();
 }
 
+void MuiTestHarness::focusNextInVirtualGroup()
+{
+    lv_group_focus_next(view->virtualNodeListNavigationGroupForTesting());
+    pump();
+}
+
+void MuiTestHarness::focusPreviousInVirtualGroup()
+{
+    lv_group_focus_prev(view->virtualNodeListNavigationGroupForTesting());
+    pump();
+}
+
+lv_group_t *MuiTestHarness::virtualNavigationGroup() const
+{
+    return view->virtualNodeListNavigationGroupForTesting();
+}
+
 void MuiTestHarness::sendActiveText(const char *msg)
 {
     char buf[240]{};

@@ -144,6 +144,7 @@ class TFTView_320x240 : public MeshtasticView
     void sendActiveTextForTesting(char *msg);
     void focusVirtualNodeForTesting(NodeId id);
     void scrollVirtualNodeForTesting(NodeId id);
+    lv_group_t *virtualNodeListNavigationGroupForTesting() const;
     void enableVirtualNodeListForTesting();
     void setOfflineFilterForTesting(bool enabled);
     void setPositionFilterForTesting(bool enabled);
@@ -298,6 +299,7 @@ class TFTView_320x240 : public MeshtasticView
     void disablePanel(lv_obj_t *panel);
     void setGroupFocus(lv_obj_t *panel);
     void setInputGroup(void);
+    void setInputGroup(lv_group_t *group);
     void setInputButtonLabel(void);
     NodeListFilter currentNodeListFilter(void) const;
     void syncVisibleNodeIndex(void);

@@ -4,6 +4,22 @@
 #include <doctest/doctest.h>
 
 #ifdef DEVICE_UI_HEADLESS_TEST
+namespace
+{
+int defaultGroupFocusCallbacks = 0;
+int defaultGroupEdgeCallbacks = 0;
+
+void defaultGroupFocusCallback(lv_group_t *)
+{
+    defaultGroupFocusCallbacks++;
+}
+
+void defaultGroupEdgeCallback(lv_group_t *, bool)
+{
+    defaultGroupEdgeCallbacks++;
+}
+} // namespace
+
 TEST_CASE("320x240 view initializes on a deterministic headless display")
 {
     MuiTestHarness harness;
@@ -531,7 +547,7 @@ TEST_CASE("gated virtual node list group focus traverses past recycled pool boun
 
     REQUIRE(harness.focusRenderedVirtualNode(lastRendered));
     CHECK(harness.selectedNode() == lastRendered);
-    harness.focusNextInGroup();
+    harness.focusNextInVirtualGroup();
     CHECK(harness.selectedNode() == nextLogical);
     CHECK(virtualRowSnapshot(harness, nextLogical).longName == "Focusable Node");
 
@@ -544,9 +560,83 @@ TEST_CASE("gated virtual node list group focus traverses past recycled pool boun
 
     REQUIRE(harness.focusRenderedVirtualNode(firstRendered));
     CHECK(harness.selectedNode() == firstRendered);
-    harness.focusPreviousInGroup();
+    harness.focusPreviousInVirtualGroup();
     CHECK(harness.selectedNode() == previousLogical);
     CHECK(virtualRowSnapshot(harness, previousLogical).longName == "Focusable Node");
+}
+
+TEST_CASE("gated virtual node list navigation does not take over the shared default group")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(1700000000U);
+
+    lv_group_t *defaultGroup = lv_group_create();
+    REQUIRE(defaultGroup != nullptr);
+    lv_group_set_default(defaultGroup);
+    lv_group_set_wrap(defaultGroup, true);
+    lv_group_set_focus_cb(defaultGroup, defaultGroupFocusCallback);
+    lv_group_set_edge_cb(defaultGroup, defaultGroupEdgeCallback);
+
+    lv_obj_t *unrelated = lv_button_create(lv_screen_active());
+    lv_group_add_obj(defaultGroup, unrelated);
+    defaultGroupFocusCallbacks = 0;
+    defaultGroupEdgeCallbacks = 0;
+
+    harness.enableVirtualNodeListFixture();
+    for (uint32_t i = 1; i <= 30; ++i) {
+        char shortName[8]{};
+        std::snprintf(shortName, sizeof(shortName), "N%02u", i);
+        harness.addNodeFixture(i, shortName, "Focusable Node", 1000U + i);
+    }
+    harness.showNodesScreen();
+
+    CHECK(lv_group_get_default() == defaultGroup);
+    CHECK(lv_group_get_wrap(defaultGroup));
+    CHECK(lv_group_get_focus_cb(defaultGroup) == defaultGroupFocusCallback);
+    CHECK(lv_group_get_edge_cb(defaultGroup) == defaultGroupEdgeCallback);
+    REQUIRE(harness.virtualNavigationGroup() != nullptr);
+    CHECK(harness.virtualNavigationGroup() != defaultGroup);
+
+    const NodeId lastRendered = renderedVirtualNodeAt(harness, VirtualNodeList::POOL_SIZE - 1);
+    auto lastIndex = harness.visibleIndex().indexOf(lastRendered);
+    REQUIRE(lastIndex.has_value());
+    const NodeId nextLogical = harness.visibleIndex().ids()[lastIndex.value() + 1];
+    REQUIRE(harness.focusRenderedVirtualNode(lastRendered));
+    defaultGroupFocusCallbacks = 0;
+    defaultGroupEdgeCallbacks = 0;
+
+    harness.focusNextInVirtualGroup();
+    CHECK(harness.selectedNode() == nextLogical);
+    CHECK(defaultGroupFocusCallbacks == 0);
+    CHECK(defaultGroupEdgeCallbacks == 0);
+    CHECK(lv_group_get_focused(defaultGroup) == unrelated);
+
+    harness.scrollVirtualNodeIntoView(20);
+    const NodeId firstRendered = renderedVirtualNodeAt(harness, 0);
+    auto firstIndex = harness.visibleIndex().indexOf(firstRendered);
+    REQUIRE(firstIndex.has_value());
+    REQUIRE(firstIndex.value() > 0);
+    const NodeId previousLogical = harness.visibleIndex().ids()[firstIndex.value() - 1];
+    REQUIRE(harness.focusRenderedVirtualNode(firstRendered));
+    defaultGroupFocusCallbacks = 0;
+    defaultGroupEdgeCallbacks = 0;
+
+    harness.focusPreviousInVirtualGroup();
+    CHECK(harness.selectedNode() == previousLogical);
+    CHECK(defaultGroupFocusCallbacks == 0);
+    CHECK(defaultGroupEdgeCallbacks == 0);
+    CHECK(lv_group_get_focused(defaultGroup) == unrelated);
+
+    harness.showTraceRoute();
+    CHECK(lv_group_get_default() == defaultGroup);
+    CHECK(lv_group_get_wrap(defaultGroup));
+    CHECK(lv_group_get_focus_cb(defaultGroup) == defaultGroupFocusCallback);
+    CHECK(lv_group_get_edge_cb(defaultGroup) == defaultGroupEdgeCallback);
+
+    lv_group_set_default(nullptr);
+    lv_obj_delete(unrelated);
+    lv_group_delete(defaultGroup);
 }
 
 TEST_CASE("default legacy node list selection is unchanged by virtual selection handling")

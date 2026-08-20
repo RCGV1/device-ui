@@ -336,19 +336,11 @@ void VirtualNodeList::createRowPool()
 
 void VirtualNodeList::attachGroupNavigation()
 {
-    attachedGroup = lv_group_get_default();
-    if (!attachedGroup) {
-        attachedGroup = lv_group_create();
-        lv_group_set_default(attachedGroup);
-        ownsAttachedGroup = true;
-    }
+    attachedGroup = lv_group_create();
     if (!attachedGroup) {
         return;
     }
 
-    previousFocusCallback = lv_group_get_focus_cb(attachedGroup);
-    previousEdgeCallback = lv_group_get_edge_cb(attachedGroup);
-    previousGroupWrap = lv_group_get_wrap(attachedGroup);
     for (auto &row : rowPool) {
         if (row.btn) {
             lv_group_add_obj(attachedGroup, row.btn);
@@ -356,19 +348,15 @@ void VirtualNodeList::attachGroupNavigation()
     }
     activeGroupNavigationList = this;
     lv_group_set_wrap(attachedGroup, false);
-    lv_group_set_focus_cb(attachedGroup, groupFocusCallback);
     lv_group_set_edge_cb(attachedGroup, groupEdgeCallback);
 }
 
 void VirtualNodeList::detachGroupNavigation()
 {
     if (attachedGroup && activeGroupNavigationList == this) {
-        lv_group_set_focus_cb(attachedGroup, previousFocusCallback);
-        lv_group_set_edge_cb(attachedGroup, previousEdgeCallback);
-        lv_group_set_wrap(attachedGroup, previousGroupWrap);
         activeGroupNavigationList = nullptr;
     }
-    if (attachedGroup && ownsAttachedGroup) {
+    if (attachedGroup) {
         for (auto &row : rowPool) {
             if (row.btn) {
                 lv_group_remove_obj(row.btn);
@@ -377,7 +365,6 @@ void VirtualNodeList::detachGroupNavigation()
         lv_group_delete(attachedGroup);
     }
     attachedGroup = nullptr;
-    ownsAttachedGroup = false;
 }
 
 void VirtualNodeList::updateVirtualContentHeight()
@@ -469,27 +456,6 @@ size_t VirtualNodeList::poolIndexForButton(lv_obj_t *button) const
     return POOL_SIZE;
 }
 
-size_t VirtualNodeList::firstVisiblePoolIndex() const
-{
-    for (size_t i = 0; i < rowPool.size(); ++i) {
-        if (rowPool[i].boundId != 0 && !lv_obj_has_flag(rowPool[i].panel, LV_OBJ_FLAG_HIDDEN)) {
-            return i;
-        }
-    }
-    return POOL_SIZE;
-}
-
-size_t VirtualNodeList::lastVisiblePoolIndex() const
-{
-    for (size_t i = rowPool.size(); i > 0; --i) {
-        const size_t index = i - 1;
-        if (rowPool[index].boundId != 0 && !lv_obj_has_flag(rowPool[index].panel, LV_OBJ_FLAG_HIDDEN)) {
-            return index;
-        }
-    }
-    return POOL_SIZE;
-}
-
 void VirtualNodeList::noteFocusedButton(lv_obj_t *button)
 {
     const size_t poolIndex = poolIndexForButton(button);
@@ -498,7 +464,6 @@ void VirtualNodeList::noteFocusedButton(lv_obj_t *button)
     }
 
     lastFocusedId = rowPool[poolIndex].boundId;
-    lastFocusedPoolIndex = poolIndex;
 }
 
 bool VirtualNodeList::focusAdjacent(NodeId id, int direction)
@@ -521,49 +486,6 @@ bool VirtualNodeList::focusAdjacent(NodeId id, int direction)
     return true;
 }
 
-void VirtualNodeList::handleGroupFocus(lv_group_t *group)
-{
-    if (!group) {
-        return;
-    }
-
-    lv_obj_t *focused = lv_group_get_focused(group);
-    const size_t focusedPoolIndex = poolIndexForButton(focused);
-    if (focusedPoolIndex < rowPool.size()) {
-        noteFocusedButton(focused);
-        if (!redirectingGroupFocus && previousFocusCallback && previousFocusCallback != groupFocusCallback) {
-            previousFocusCallback(group);
-        }
-        return;
-    }
-
-    if (redirectingGroupFocus || lastFocusedId == 0) {
-        return;
-    }
-
-    const size_t firstVisible = firstVisiblePoolIndex();
-    const size_t lastVisible = lastVisiblePoolIndex();
-    int direction = 0;
-    if (lastFocusedPoolIndex == lastVisible) {
-        direction = 1;
-    } else if (lastFocusedPoolIndex == firstVisible) {
-        direction = -1;
-    }
-    if (direction == 0) {
-        if (previousFocusCallback && previousFocusCallback != groupFocusCallback) {
-            previousFocusCallback(group);
-        }
-        return;
-    }
-
-    redirectingGroupFocus = true;
-    const bool moved = focusAdjacent(lastFocusedId, direction);
-    redirectingGroupFocus = false;
-    if (!moved && previousFocusCallback) {
-        previousFocusCallback(group);
-    }
-}
-
 void VirtualNodeList::handleGroupEdge(bool forward)
 {
     if (lastFocusedId == 0) {
@@ -571,11 +493,8 @@ void VirtualNodeList::handleGroupEdge(bool forward)
     }
 
     redirectingGroupFocus = true;
-    const bool moved = focusAdjacent(lastFocusedId, forward ? 1 : -1);
+    focusAdjacent(lastFocusedId, forward ? 1 : -1);
     redirectingGroupFocus = false;
-    if (!moved && previousEdgeCallback && previousEdgeCallback != groupEdgeCallback && attachedGroup) {
-        previousEdgeCallback(attachedGroup, forward);
-    }
 }
 
 void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool isExpanded)
@@ -769,13 +688,6 @@ void VirtualNodeList::rowPositionCallback(lv_event_t *e)
     const auto id = static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(label)));
     if (id != 0 && lv_event_get_code(e) == LV_EVENT_CLICKED) {
         self->actionSink.nodePositionClicked(id);
-    }
-}
-
-void VirtualNodeList::groupFocusCallback(lv_group_t *group)
-{
-    if (activeGroupNavigationList) {
-        activeGroupNavigationList->handleGroupFocus(group);
     }
 }
 
