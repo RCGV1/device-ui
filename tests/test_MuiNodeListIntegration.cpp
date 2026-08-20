@@ -121,4 +121,104 @@ TEST_CASE("last-heard updates keep the model in sync with the node row")
     REQUIRE(node != nullptr);
     CHECK(node->lastHeard == 900);
 }
+
+TEST_CASE("default node list keeps retained legacy rows as the production path")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.populateLegacyNodeFixtures(25);
+
+    CHECK_FALSE(harness.virtualNodeListEnabled());
+    CHECK(harness.legacyRetainedNodeCount() == 25);
+    CHECK(harness.renderedNodeCount() == 25);
+}
+
+TEST_CASE("visible node index resyncs after retained model mutations")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(1700000000U);
+
+    SUBCASE("insertion")
+    {
+        harness.addNodeFixture(0x11111111, "ONE", "One Node", 100);
+        REQUIRE(harness.visibleIndex().size() == 1);
+        CHECK(harness.visibleIndex().ids()[0] == 0x11111111);
+    }
+
+    SUBCASE("user update")
+    {
+        harness.addNodeFixture(0x11111111, "ONE", "One Node", 100);
+        harness.updateNodeFixture(0x11111111, "TWO", "Two Node", static_cast<uint8_t>(MeshtasticView::router), true);
+        REQUIRE(harness.visibleIndex().size() == 1);
+        const NodeRecord *node = harness.node(harness.visibleIndex().ids()[0]);
+        REQUIRE(node != nullptr);
+        CHECK(std::string(node->user.long_name) == "Two Node");
+    }
+
+    SUBCASE("filter change")
+    {
+        harness.addNodeFixture(0x11111111, "OLD", "Old Node", 100);
+        harness.addNodeFixture(0x22222222, "NEW", "New Node", 1699999990U);
+        harness.setOfflineFilterFixture(true);
+        REQUIRE(harness.visibleIndex().size() == 1);
+        CHECK(harness.visibleIndex().ids()[0] == 0x22222222);
+    }
+
+    SUBCASE("active chat change")
+    {
+        harness.addNodeFixture(0x11111111, "ONE", "One Node", 100);
+        harness.addActiveChatFixture(0x11111111);
+        REQUIRE(harness.visibleIndex().size() == 1);
+        const NodeRecord *node = harness.node(harness.visibleIndex().ids()[0]);
+        REQUIRE(node != nullptr);
+        CHECK(node->hasActiveChat);
+    }
+
+    SUBCASE("last-heard reorder")
+    {
+        harness.addNodeFixture(0x11111111, "ONE", "One Node", 100);
+        harness.addNodeFixture(0x22222222, "TWO", "Two Node", 200);
+        harness.setCurrentTime(300);
+        harness.updateLastHeardFixture(0x11111111);
+        REQUIRE(harness.visibleIndex().size() == 2);
+        CHECK(harness.visibleIndex().ids()[0] == 0x11111111);
+        CHECK(harness.visibleIndex().ids()[1] == 0x22222222);
+    }
+
+    SUBCASE("presentation resync")
+    {
+        harness.addNodeFixture(0x11111111, "ONE", "One Node", 100);
+        harness.toggleResyncPresentationFixture();
+        REQUIRE(harness.visibleIndex().size() == 1);
+        CHECK(harness.visibleIndex().ids()[0] == 0x11111111);
+    }
+
+    SUBCASE("purge")
+    {
+        harness.addUntilPurgeFixture(251);
+        CHECK(harness.store().size() == 250);
+        CHECK(harness.visibleIndex().size() == 250);
+        CHECK_FALSE(harness.visibleIndex().contains(0xb0000000U));
+    }
+}
+
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+TEST_CASE("gated virtual node list uses a dedicated bounded host")
+{
+    for (size_t nodeCount : {25U, 100U, 250U}) {
+        CAPTURE(nodeCount);
+        MuiTestHarness harness;
+        harness.resetNodeList();
+        harness.enableVirtualNodeListFixture();
+        harness.populateLegacyNodeFixtures(nodeCount);
+
+        CHECK(harness.virtualNodeListEnabled());
+        CHECK(harness.legacyRetainedNodeCount() == 0);
+        CHECK(harness.renderedNodeCount() == nodeCount);
+        CHECK(harness.visibleIndex().size() == nodeCount);
+        CHECK(harness.nodeListObjectCount() <= 90);
+    }
+}
+#endif
 #endif

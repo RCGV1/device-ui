@@ -81,6 +81,9 @@ class MuiTestHarness
     void updateLastHeardFixture(uint32_t nodeId);
     void addActiveChatFixture(uint32_t nodeId, uint8_t channel = 0);
     void toggleResyncPresentationFixture();
+    void enableVirtualNodeListFixture();
+    void setOfflineFilterFixture(bool enabled);
+    void addUntilPurgeFixture(size_t count);
     std::vector<MuiNodeFixture> makeLegacyNodeFixtures(size_t count = 100, uint32_t seed = 42, size_t iteration = 0) const;
     void populateLegacyNodeFixtures(size_t count = 100, uint32_t seed = 42, size_t iteration = 0);
     void scanNodeFilters();
@@ -88,6 +91,8 @@ class MuiTestHarness
     size_t objectCount() const;
     size_t nodeListObjectCount() const;
     size_t renderedNodeCount() const;
+    bool virtualNodeListEnabled() const;
+    size_t legacyRetainedNodeCount() const;
     const char *nodeLongName(uint32_t nodeId) const;
     uint8_t nodeRole(uint32_t nodeId) const;
     const NodeRecord *node(uint32_t nodeId) const;

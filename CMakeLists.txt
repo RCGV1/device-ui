@@ -18,6 +18,7 @@ option(ENABLE_DOCTESTS "Include tests in the library. Setting this to OFF will r
 option(ENABLE_DEBUG_LOG "Enable debug log" OFF)
 option(ENABLE_MUI_HEADLESS_TESTS "Use deterministic headless display and input support for MUI integration tests" OFF)
 option(ENABLE_MUI_X11_SIMULATOR "Build the test-only interactive X11 MUI simulator" OFF)
+option(ENABLE_MUI_VIRTUAL_NODE_LIST "Use the test/development-only virtual MUI node list host" OFF)
 option(MUI_NODE_LIST_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer for native node-list tests" OFF)
 
 if(ENABLE_MUI_HEADLESS_TESTS AND NOT ENABLE_DOCTESTS)
@@ -26,6 +27,10 @@ endif()
 
 if(ENABLE_MUI_X11_SIMULATOR AND NOT ENABLE_DOCTESTS)
     message(FATAL_ERROR "ENABLE_MUI_X11_SIMULATOR requires ENABLE_DOCTESTS")
+endif()
+
+if(ENABLE_MUI_VIRTUAL_NODE_LIST AND NOT ENABLE_MUI_HEADLESS_TESTS)
+    message(FATAL_ERROR "ENABLE_MUI_VIRTUAL_NODE_LIST is test/development-only and requires ENABLE_MUI_HEADLESS_TESTS")
 endif()
 
 if(MUI_NODE_LIST_SANITIZERS)
@@ -57,6 +62,9 @@ if(ENABLE_MUI_HEADLESS_TESTS)
     add_compile_definitions(DEVICE_UI_HEADLESS_TEST)
     add_compile_definitions(HAS_TFT=1)
     add_compile_definitions(RAM_SIZE=16384)
+    if(ENABLE_MUI_VIRTUAL_NODE_LIST)
+        add_compile_definitions(DEVICE_UI_MUI_VIRTUAL_NODE_LIST)
+    endif()
     set(CONFIG_LV_BUILD_DEMOS OFF CACHE BOOL "Build LVGL demos" FORCE)
     set(CONFIG_LV_BUILD_EXAMPLES OFF CACHE BOOL "Build LVGL examples" FORCE)
 elseif(ENABLE_MUI_X11_SIMULATOR)

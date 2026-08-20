@@ -180,6 +180,24 @@ void MuiTestHarness::toggleResyncPresentationFixture()
     view->notifyResync(false);
 }
 
+void MuiTestHarness::enableVirtualNodeListFixture()
+{
+    view->enableVirtualNodeListForTesting();
+}
+
+void MuiTestHarness::setOfflineFilterFixture(bool enabled)
+{
+    view->setOfflineFilterForTesting(enabled);
+}
+
+void MuiTestHarness::addUntilPurgeFixture(size_t count)
+{
+    for (size_t i = 0; i < count; ++i) {
+        const uint32_t id = 0xb0000000U + static_cast<uint32_t>(i);
+        addNodeFixture(id, "NODE", "Purge Candidate", 1000U + static_cast<uint32_t>(i));
+    }
+}
+
 std::vector<MuiNodeFixture> MuiTestHarness::makeLegacyNodeFixtures(size_t count, uint32_t seed, size_t iteration) const
 {
     constexpr uint32_t now = 1700000000U;
@@ -236,7 +254,11 @@ std::vector<MuiNodeFixture> MuiTestHarness::makeLegacyNodeFixtures(size_t count,
 
 void MuiTestHarness::populateLegacyNodeFixtures(size_t count, uint32_t seed, size_t iteration)
 {
+    const bool virtualWasEnabled = virtualNodeListEnabled();
     resetNodeList();
+    if (virtualWasEnabled) {
+        enableVirtualNodeListFixture();
+    }
     setCurrentTime(1700000000U);
 
     const auto fixtures = makeLegacyNodeFixtures(count, seed, iteration);
@@ -276,6 +298,16 @@ size_t MuiTestHarness::nodeListObjectCount() const
 size_t MuiTestHarness::renderedNodeCount() const
 {
     return view->nodeCountForTesting();
+}
+
+bool MuiTestHarness::virtualNodeListEnabled() const
+{
+    return view->virtualNodeListEnabledForTesting();
+}
+
+size_t MuiTestHarness::legacyRetainedNodeCount() const
+{
+    return view->legacyRetainedNodeCountForTesting();
 }
 
 const char *MuiTestHarness::nodeLongName(uint32_t nodeId) const

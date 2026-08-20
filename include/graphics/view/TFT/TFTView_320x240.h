@@ -3,7 +3,11 @@
 #include "graphics/common/MeshtasticView.h"
 #include "graphics/common/NodeStore.h"
 #include "graphics/common/VisibleNodeIndex.h"
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+#include "graphics/view/TFT/VirtualNodeList.h"
+#endif
 #include "meshtastic/clientonly.pb.h"
+#include <memory>
 #include <set>
 
 class MapPanel;
@@ -14,7 +18,11 @@ class MapPanel;
  * Note: due to static callbacks in lvgl this class is modelled as
  *       a singleton with static callback members
  */
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+class TFTView_320x240 : public MeshtasticView, private NodeListActionSink
+#else
 class TFTView_320x240 : public MeshtasticView
+#endif
 {
   public:
     void init(IClientBase *client) override;
@@ -129,6 +137,10 @@ class TFTView_320x240 : public MeshtasticView
     void sendDirectTextForTesting(NodeId id, char *msg);
     uint8_t nodeHopLimitForTesting(NodeId id, int8_t unknownHops) const;
     uintptr_t traceRouteNodeCallbackPayloadForTesting(NodeId id) const;
+    void enableVirtualNodeListForTesting();
+    void setOfflineFilterForTesting(bool enabled);
+    bool virtualNodeListEnabledForTesting() const;
+    size_t legacyRetainedNodeCountForTesting() const;
 #endif
 
     enum BasicSettings {
@@ -278,6 +290,15 @@ class TFTView_320x240 : public MeshtasticView
     void setGroupFocus(lv_obj_t *panel);
     void setInputGroup(void);
     void setInputButtonLabel(void);
+    NodeListFilter currentNodeListFilter(void) const;
+    void syncVisibleNodeIndex(void);
+    void syncNodeListPresentation(void);
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    void ensureVirtualNodeList(void);
+    void nodeClicked(NodeId id) override {}
+    void nodeLongPressed(NodeId id) override {}
+    void nodeFocused(NodeId id) override {}
+#endif
     void updateGroupChannel(uint8_t chId);
 
     void backup(uint32_t option);
@@ -515,4 +536,9 @@ class TFTView_320x240 : public MeshtasticView
     meshtastic_DeviceProfile_full db{}; // full copy of the node's configuration db (except nodeinfos) plus ui data
     NodeStore nodeStore;
     VisibleNodeIndex visibleNodes;
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    lv_obj_t *virtualNodeListHost = nullptr;
+    std::unique_ptr<VirtualNodeList> virtualNodeList;
+    bool useVirtualNodeList = false;
+#endif
 };
