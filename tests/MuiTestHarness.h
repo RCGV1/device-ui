@@ -52,6 +52,7 @@ struct MuiRowSnapshot {
     uint32_t imageBorder = 0;
     uint32_t imageRecolor = 0;
     uint8_t imageRecolorOpa = 0;
+    uintptr_t imageSrc = 0;
 };
 
 class MuiTestHarness
@@ -118,6 +119,9 @@ class MuiTestHarness
     void showTraceRoute();
     void startTraceRoute();
     void dispatchTraceRouteNodeCallback(uint32_t nodeId);
+    void dispatchMapNodeCallback(uint32_t nodeId);
+    void dispatchChatNodeCallback(uint32_t nodeId);
+    void dispatchBadKeyRoutingError(uint32_t nodeId);
     bool nodesPanelVisible() const;
     bool traceRoutePanelVisible() const;
     void sendDirectText(uint32_t nodeId, const char *msg);
@@ -129,6 +133,7 @@ class MuiTestHarness
     uint32_t selectedNode() const;
     bool messagesPanelVisible() const;
     bool mapPanelVisible() const;
+    uintptr_t topMessagesNodeImageSrc() const;
     void dispatchVirtualNodeEvent(uint32_t nodeId, lv_event_code_t eventCode);
     void dispatchVirtualNodePositionEvent(uint32_t nodeId);
     bool focusRenderedVirtualNode(uint32_t nodeId);

@@ -31,6 +31,7 @@ struct NodeRecord {
     bool viaMqtt = false;
     uint32_t lastHeard = 0;
     uint64_t recencyOrder = 0;
+    bool recencyPromoted = false;
     int32_t rssi = 0;
     float snr = 0;
     int8_t hopsAway = -1;

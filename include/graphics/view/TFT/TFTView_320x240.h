@@ -134,6 +134,9 @@ class TFTView_320x240 : public MeshtasticView
     void showTraceRouteForTesting();
     void startTraceRouteForTesting();
     void dispatchTraceRouteNodeCallbackForTesting(NodeId id);
+    void dispatchMapNodeCallbackForTesting(NodeId id);
+    void dispatchChatNodeCallbackForTesting(NodeId id);
+    void dispatchBadKeyRoutingErrorForTesting(NodeId id, uint32_t requestId);
     bool nodesPanelVisibleForTesting() const;
     bool traceRoutePanelVisibleForTesting() const;
     void sendDirectTextForTesting(NodeId id, char *msg);
@@ -142,6 +145,7 @@ class TFTView_320x240 : public MeshtasticView
     uint32_t selectedNodeForTesting() const;
     bool messagesPanelVisibleForTesting() const;
     bool mapPanelVisibleForTesting() const;
+    uintptr_t topMessagesNodeImageSrcForTesting() const;
     void sendActiveTextForTesting(char *msg);
     void focusVirtualNodeForTesting(NodeId id);
     void scrollVirtualNodeForTesting(NodeId id);
@@ -336,6 +340,7 @@ class TFTView_320x240 : public MeshtasticView
     bool nodeIsMessagable(NodeId id) const;
     uint8_t nodeChannel(NodeId id) const;
     bool nodeHasKey(NodeId id) const;
+    bool nodeHasBadKey(NodeId id) const;
     int8_t nodeHops(NodeId id) const;
     const char *nodeDisplayName(NodeId id) const;
     const char *nodeShortName(NodeId id) const;
@@ -552,10 +557,10 @@ class TFTView_320x240 : public MeshtasticView
     meshtastic_DeviceProfile_full db{}; // full copy of the node's configuration db (except nodeinfos) plus ui data
     NodeStore nodeStore;
     VisibleNodeIndex visibleNodes;
+    bool nodeModelEnabled = false;
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
     lv_obj_t *virtualNodeListHost = nullptr;
     std::unique_ptr<VirtualNodeList> virtualNodeList;
     bool useVirtualNodeList = false;
-    bool nodeModelEnabled = false;
 #endif
 };

@@ -139,8 +139,13 @@ void VisibleNodeIndex::rebuild(const NodeStore &store, const NodeListFilter &fil
         }
         uint64_t recencyA = recA ? recA->recencyOrder : 0;
         uint64_t recencyB = recB ? recB->recencyOrder : 0;
+        const bool promotedA = recA && recA->recencyPromoted;
+        const bool promotedB = recB && recB->recencyPromoted;
+        if (promotedA != promotedB) {
+            return promotedA;
+        }
         if (recencyA != recencyB) {
-            return recencyA > recencyB;
+            return promotedA ? recencyA > recencyB : recencyA < recencyB;
         }
         return a < b;
     });

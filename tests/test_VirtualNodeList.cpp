@@ -63,6 +63,7 @@ MuiRowSnapshot snapshotVirtualRow(lv_obj_t *row)
         lv_color_to_u32(lv_obj_get_style_border_color(image, LV_PART_MAIN)),
         lv_color_to_u32(lv_obj_get_style_image_recolor(image, LV_PART_MAIN)),
         lv_obj_get_style_image_recolor_opa(image, LV_PART_MAIN),
+        reinterpret_cast<uintptr_t>(lv_image_get_src(image)),
     };
 }
 

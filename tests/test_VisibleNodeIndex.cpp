@@ -215,7 +215,8 @@ TEST_CASE("visible index promotes same-second last-heard refreshes ahead of olde
     NodeListFilter filter;
     index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
     REQUIRE(index.ids().size() == 2);
-    CHECK(index.ids()[0] == 0x1000);
+    CHECK(index.ids()[0] == 0x9000);
+    CHECK(index.ids()[1] == 0x1000);
 
     store.updateLastHeard(0x9000, 500);
     index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
@@ -236,6 +237,6 @@ TEST_CASE("visible index clamps future last-heard timestamps before ordering")
     index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
 
     REQUIRE(index.ids().size() == 2);
-    CHECK(index.ids()[0] == 0x1000);
-    CHECK(index.ids()[1] == 0x9000);
+    CHECK(index.ids()[0] == 0x9000);
+    CHECK(index.ids()[1] == 0x1000);
 }

@@ -71,14 +71,6 @@ void setRoleImage(const NodeRecord &record, lv_obj_t *img)
     uint32_t fgColor = 0;
     std::tie(bgColor, fgColor) = nodeColor(record.id);
 
-    if (record.hasBadKey) {
-        lv_image_set_src(img, &img_lock_slash_image);
-        lv_obj_set_style_border_color(img, lv_color_hex(0xff5555), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_color(img, lv_color_hex(bgColor), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_image_recolor_opa(img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-        return;
-    }
-
     if (record.unmessagable) {
         lv_image_set_src(img, &img_unmessagable_image);
         lv_obj_set_style_border_color(img, lv_color_hex(bgColor), LV_PART_MAIN | LV_STATE_DEFAULT);

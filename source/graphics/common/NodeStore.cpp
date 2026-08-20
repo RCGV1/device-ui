@@ -55,6 +55,7 @@ const NodeRecord *NodeStore::find(NodeId id) const
 
 void NodeStore::touchRecency(NodeRecord &record)
 {
+    record.recencyPromoted = true;
     record.recencyOrder = nextRecencyOrder++;
 }
 
@@ -66,6 +67,7 @@ NodeMutation NodeStore::upsertUser(NodeId id, uint8_t channel, uint32_t lastHear
 
     if (inserted) {
         record.id = id;
+        record.recencyOrder = nextRecencyOrder++;
         changed = NodeFieldUser | NodeFieldChannel | NodeFieldFlags | NodeFieldLastHeard;
     }
     if (!record.hasUser || !sameUser(record.user, user)) {
@@ -108,6 +110,7 @@ NodeMutation NodeStore::upsertUnknown(NodeId id, uint8_t channel, uint32_t lastH
 
     if (inserted) {
         record.id = id;
+        record.recencyOrder = nextRecencyOrder++;
         changed = NodeFieldUser | NodeFieldChannel | NodeFieldFlags | NodeFieldLastHeard;
     }
     if (record.hasUser || !sameUser(record.user, fallback)) {

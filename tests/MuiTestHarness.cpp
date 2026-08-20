@@ -469,6 +469,21 @@ uintptr_t MuiTestHarness::traceRouteNodeCallbackPayload(uint32_t nodeId) const
     return view->traceRouteNodeCallbackPayloadForTesting(nodeId);
 }
 
+void MuiTestHarness::dispatchMapNodeCallback(uint32_t nodeId)
+{
+    view->dispatchMapNodeCallbackForTesting(nodeId);
+}
+
+void MuiTestHarness::dispatchChatNodeCallback(uint32_t nodeId)
+{
+    view->dispatchChatNodeCallbackForTesting(nodeId);
+}
+
+void MuiTestHarness::dispatchBadKeyRoutingError(uint32_t nodeId)
+{
+    view->dispatchBadKeyRoutingErrorForTesting(nodeId, recordingController->lastText.requestId);
+}
+
 MuiControllerCall MuiTestHarness::lastPositionRequest() const
 {
     return recordingController->lastPosition;
@@ -497,6 +512,11 @@ bool MuiTestHarness::messagesPanelVisible() const
 bool MuiTestHarness::mapPanelVisible() const
 {
     return view->mapPanelVisibleForTesting();
+}
+
+uintptr_t MuiTestHarness::topMessagesNodeImageSrc() const
+{
+    return view->topMessagesNodeImageSrcForTesting();
 }
 
 namespace
@@ -672,6 +692,7 @@ MuiRowSnapshot MuiTestHarness::legacyRowSnapshot(uint32_t nodeId) const
             lv_color_to_u32(lv_obj_get_style_border_color(image, LV_PART_MAIN)),
             lv_color_to_u32(lv_obj_get_style_image_recolor(image, LV_PART_MAIN)),
             lv_obj_get_style_image_recolor_opa(image, LV_PART_MAIN),
+            reinterpret_cast<uintptr_t>(lv_image_get_src(image)),
         };
     }
     return {};

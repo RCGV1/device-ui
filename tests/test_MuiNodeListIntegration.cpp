@@ -1,6 +1,7 @@
 #include "MuiTestHarness.h"
 #include "graphics/common/MeshtasticView.h"
 #include "graphics/view/TFT/VirtualNodeList.h"
+#include "images.h"
 #include <doctest/doctest.h>
 
 #ifdef DEVICE_UI_HEADLESS_TEST
@@ -284,6 +285,7 @@ MuiRowSnapshot virtualRowSnapshot(MuiTestHarness &harness, NodeId id)
             lv_color_to_u32(lv_obj_get_style_border_color(image, LV_PART_MAIN)),
             lv_color_to_u32(lv_obj_get_style_image_recolor(image, LV_PART_MAIN)),
             lv_obj_get_style_image_recolor_opa(image, LV_PART_MAIN),
+            reinterpret_cast<uintptr_t>(lv_image_get_src(image)),
         };
     }
     return {};
@@ -490,6 +492,55 @@ TEST_CASE("gated virtual trace-route result callbacks reopen nodes by model Node
     CHECK(harness.selectedNode() == 0x11111111);
 }
 
+TEST_CASE("gated virtual map and chat result callbacks reopen nodes by model NodeId")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.enableVirtualNodeListFixture();
+    harness.setCurrentTime(1700000000U);
+
+    harness.addNodeFixture(0x11111111, "ONE", "One Node", 1699999900U, MeshtasticView::router, true, false, 1);
+
+    harness.dispatchMapNodeCallback(0x11111111);
+    CHECK(harness.nodesPanelVisible());
+    CHECK(harness.selectedNode() == 0x11111111);
+
+    harness.showTraceRoute();
+    REQUIRE(harness.traceRoutePanelVisible());
+    harness.dispatchChatNodeCallback(0x11111111);
+    CHECK(harness.nodesPanelVisible());
+    CHECK(harness.selectedNode() == 0x11111111);
+}
+
+TEST_CASE("gated virtual bad-key routing updates model presentation and message reopen state")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.enableVirtualNodeListFixture();
+    harness.setCurrentTime(1700000000U);
+
+    constexpr NodeId nodeId = 0x11111111;
+    harness.addNodeFixture(nodeId, "ONE", "One Node", 1699999900U, MeshtasticView::router, true, false, 1);
+    harness.updateHopsFixture(nodeId, 2);
+    harness.sendDirectText(nodeId, "hello");
+
+    harness.dispatchBadKeyRoutingError(nodeId);
+
+    const NodeRecord *node = harness.node(nodeId);
+    REQUIRE(node != nullptr);
+    CHECK(node->hasKey);
+    CHECK(node->hasBadKey);
+    CHECK_FALSE(harness.nodeHasKey(nodeId));
+
+    const MuiRowSnapshot badKeyRow = virtualRowSnapshot(harness, nodeId);
+    CHECK(badKeyRow.imageSrc == reinterpret_cast<uintptr_t>(&img_node_router_image));
+
+    harness.sendDirectText(nodeId, "retry");
+    CHECK(harness.messagesPanelVisible());
+    CHECK(harness.topMessagesNodeImageSrc() == reinterpret_cast<uintptr_t>(&img_lock_slash_image));
+    CHECK_FALSE(harness.lastTextMessage().usePkc);
+}
+
 TEST_CASE("gated virtual node list routes expanded position clicks to map by NodeId")
 {
     MuiTestHarness harness;
@@ -505,6 +556,29 @@ TEST_CASE("gated virtual node list routes expanded position clicks to map by Nod
 
     harness.dispatchVirtualNodePositionEvent(0x11111111);
     CHECK(harness.mapPanelVisible());
+}
+
+TEST_CASE("gated virtual node list preserves legacy same-second insertion and update recency order")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.enableVirtualNodeListFixture();
+    harness.setCurrentTime(1000U);
+
+    harness.addNodeFixture(0x30000000, "THR", "Third Inserted", 1000U);
+    harness.addNodeFixture(0x10000000, "FIR", "First Inserted", 1000U);
+    harness.addNodeFixture(0x20000000, "SEC", "Second Inserted", 1000U);
+    CHECK(renderedVirtualNodeAt(harness, 0) == 0x30000000);
+    CHECK(renderedVirtualNodeAt(harness, 1) == 0x10000000);
+    CHECK(renderedVirtualNodeAt(harness, 2) == 0x20000000);
+
+    harness.updateLastHeardFixture(0x20000000);
+    CHECK(renderedVirtualNodeAt(harness, 0) == 0x20000000);
+
+    harness.addNodeFixture(0x40000000, "FUT", "Future Clamped", 5000U);
+    CHECK(renderedVirtualNodeAt(harness, 0) == 0x20000000);
+    REQUIRE(harness.node(0x40000000) != nullptr);
+    CHECK(harness.node(0x40000000)->lastHeard == 1000U);
 }
 
 TEST_CASE("gated virtual node list keeps selection stable across recycling, filters, and purge")

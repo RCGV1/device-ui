@@ -158,6 +158,12 @@ bool TFTView_320x240::nodeHasKey(NodeId id) const
     return record && record->hasKey && !record->hasBadKey;
 }
 
+bool TFTView_320x240::nodeHasBadKey(NodeId id) const
+{
+    const NodeRecord *record = nodeStore.find(id);
+    return record && record->hasBadKey;
+}
+
 int8_t TFTView_320x240::nodeHops(NodeId id) const
 {
     const NodeRecord *record = nodeStore.find(id);
@@ -307,7 +313,6 @@ void TFTView_320x240::resetNodeListForTesting(void)
     visibleNodes = VisibleNodeIndex();
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
     useVirtualNodeList = false;
-    nodeModelEnabled = false;
     if (virtualNodeList) {
         virtualNodeList.reset();
     }
@@ -316,6 +321,7 @@ void TFTView_320x240::resetNodeListForTesting(void)
         virtualNodeListHost = nullptr;
     }
 #endif
+    nodeModelEnabled = false;
     updateNodesStatus();
     syncNodeListPresentation();
 }
@@ -488,6 +494,29 @@ void TFTView_320x240::dispatchTraceRouteNodeCallbackForTesting(NodeId id)
     ui_event_trace_route_node(&event);
 }
 
+void TFTView_320x240::dispatchMapNodeCallbackForTesting(NodeId id)
+{
+    lv_event_t event{};
+    event.user_data = reinterpret_cast<void *>(static_cast<uintptr_t>(id));
+    ui_event_mapNodeButton(&event);
+}
+
+void TFTView_320x240::dispatchChatNodeCallbackForTesting(NodeId id)
+{
+    lv_event_t event{};
+    event.user_data = reinterpret_cast<void *>(static_cast<uintptr_t>(id));
+    ui_event_chatNodeButton(&event);
+}
+
+void TFTView_320x240::dispatchBadKeyRoutingErrorForTesting(NodeId id, uint32_t requestId)
+{
+    meshtastic_Routing routing = meshtastic_Routing_init_default;
+    routing.which_variant = meshtastic_Routing_error_reason_tag;
+    routing.error_reason = meshtastic_Routing_Error_PKI_UNKNOWN_PUBKEY;
+    meshtastic_MeshPacket packet = meshtastic_MeshPacket_init_default;
+    handleResponse(id, requestId, routing, packet);
+}
+
 bool TFTView_320x240::nodesPanelVisibleForTesting() const
 {
     return activePanel == objects.nodes_panel && !lv_obj_has_flag(objects.nodes_panel, LV_OBJ_FLAG_HIDDEN);
@@ -527,6 +556,11 @@ bool TFTView_320x240::messagesPanelVisibleForTesting() const
 bool TFTView_320x240::mapPanelVisibleForTesting() const
 {
     return activePanel == objects.map_panel && !lv_obj_has_flag(objects.map_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+uintptr_t TFTView_320x240::topMessagesNodeImageSrcForTesting() const
+{
+    return reinterpret_cast<uintptr_t>(lv_obj_get_style_bg_image_src(objects.top_messages_node_image, LV_PART_MAIN));
 }
 
 void TFTView_320x240::sendActiveTextForTesting(char *msg)
@@ -572,10 +606,8 @@ void TFTView_320x240::enableVirtualNodeListForTesting()
 
 void TFTView_320x240::enableVirtualNodeModelForTesting()
 {
-#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
     nodeModelEnabled = true;
     syncNodeListPresentation();
-#endif
 }
 
 void TFTView_320x240::setActiveChatForTesting(NodeId id, bool active)
@@ -2913,12 +2945,20 @@ void TFTView_320x240::ui_event_mapNodeButton(lv_event_t *e)
     uint32_t nodeNum = (unsigned long)e->user_data;
     ILOG_DEBUG("map node %08x", nodeNum);
     lv_obj_t *panel = THIS->nodePanel(nodeNum);
-    if (!panel)
-        return;
-    THIS->ui_set_active(objects.nodes_button, objects.nodes_panel, objects.top_nodes_panel);
-    lv_obj_scroll_to_view(panel, LV_ANIM_ON);
-    if (panel != currentPanel)
-        ui_event_NodeButton(e);
+    if (panel) {
+        THIS->ui_set_active(objects.nodes_button, objects.nodes_panel, objects.top_nodes_panel);
+        lv_obj_scroll_to_view(panel, LV_ANIM_ON);
+        if (panel != currentPanel)
+            ui_event_NodeButton(e);
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    } else if (THIS->useVirtualNodeList && THIS->nodeRecord(nodeNum)) {
+        THIS->selectNode(nodeNum);
+        THIS->ui_set_active(objects.nodes_button, objects.nodes_panel, objects.top_nodes_panel);
+        THIS->syncNodeListPresentation();
+        if (THIS->virtualNodeList)
+            THIS->virtualNodeList->scrollTo(nodeNum, LV_ANIM_ON);
+#endif
+    }
 }
 
 void TFTView_320x240::ui_event_chatNodeButton(lv_event_t *e)
@@ -2931,6 +2971,14 @@ void TFTView_320x240::ui_event_chatNodeButton(lv_event_t *e)
         lv_obj_scroll_to_view(panel, LV_ANIM_ON);
         if (panel != currentPanel)
             ui_event_NodeButton(e);
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    } else if (THIS->useVirtualNodeList && THIS->nodeRecord(nodeNum)) {
+        THIS->selectNode(nodeNum);
+        THIS->ui_set_active(objects.nodes_button, objects.nodes_panel, objects.top_nodes_panel);
+        THIS->syncNodeListPresentation();
+        if (THIS->virtualNodeList)
+            THIS->virtualNodeList->scrollTo(nodeNum, LV_ANIM_ON);
+#endif
     }
 }
 
@@ -5163,6 +5211,8 @@ void TFTView_320x240::addNode(uint32_t nodeNum, uint8_t ch, const char *userShor
 
     ILOG_DEBUG("addNode(%d): num=0x%08x, lastseen=%d, name=%s(%s), role=%d", nodeCount, nodeNum, lastHeard, userLong, userShort,
                role);
+    const uint32_t modelLastHeard =
+        lastHeard && curtime && lastHeard > static_cast<uint32_t>(curtime) ? static_cast<uint32_t>(curtime) : lastHeard;
     while (nodeCount >= MAX_NUM_NODES_VIEW) {
         if (!nodePurgeCandidate(nodeNum))
             return;
@@ -5193,7 +5243,7 @@ void TFTView_320x240::addNode(uint32_t nodeNum, uint8_t ch, const char *userShor
             }
             userRecord.has_is_unmessagable = true;
             userRecord.is_unmessagable = unmessagable;
-            nodeStore.upsertUser(nodeNum, ch, lastHeard, userRecord, false);
+            nodeStore.upsertUser(nodeNum, ch, modelLastHeard, userRecord, false);
         }
         syncNodeListPresentation();
         return;
@@ -5212,7 +5262,7 @@ void TFTView_320x240::addNode(uint32_t nodeNum, uint8_t ch, const char *userShor
         }
         userRecord.has_is_unmessagable = true;
         userRecord.is_unmessagable = unmessagable;
-        nodeStore.upsertUser(nodeNum, ch, lastHeard, userRecord, false);
+        nodeStore.upsertUser(nodeNum, ch, modelLastHeard, userRecord, false);
     }
 
     lv_obj_t *p = lv_obj_create(objects.nodes_panel);
@@ -5426,11 +5476,13 @@ void TFTView_320x240::addOrUpdateNode(uint32_t nodeNum, uint8_t channel, uint32_
 {
     MeshtasticView::addOrUpdateNode(nodeNum, channel, lastHeard, role, hasKey, viaMqtt);
     if (shouldMaintainNodeModel()) {
+        const uint32_t modelLastHeard =
+            lastHeard && curtime && lastHeard > static_cast<uint32_t>(curtime) ? static_cast<uint32_t>(curtime) : lastHeard;
         if (!nodeStore.find(nodeNum) && nodeStore.size() >= MAX_NUM_NODES_VIEW && !nodePurgeCandidate(nodeNum)) {
             syncNodeListPresentation();
             return;
         }
-        nodeStore.upsertUnknown(nodeNum, channel, lastHeard, static_cast<uint8_t>(role), hasKey, viaMqtt);
+        nodeStore.upsertUnknown(nodeNum, channel, modelLastHeard, static_cast<uint8_t>(role), hasKey, viaMqtt);
         while (nodeStore.size() > MAX_NUM_NODES_VIEW) {
             if (!nodePurgeCandidate(nodeNum))
                 break;
@@ -5443,11 +5495,13 @@ void TFTView_320x240::addOrUpdateNode(uint32_t nodeNum, uint8_t channel, uint32_
 void TFTView_320x240::addOrUpdateNode(uint32_t nodeNum, uint8_t channel, uint32_t lastHeard, const meshtastic_User &cfg)
 {
     if (shouldMaintainNodeModel()) {
+        const uint32_t modelLastHeard =
+            lastHeard && curtime && lastHeard > static_cast<uint32_t>(curtime) ? static_cast<uint32_t>(curtime) : lastHeard;
         if (!nodeStore.find(nodeNum) && nodeStore.size() >= MAX_NUM_NODES_VIEW && !nodePurgeCandidate(nodeNum)) {
             syncNodeListPresentation();
             return;
         }
-        nodeStore.upsertUser(nodeNum, channel, lastHeard, cfg, false);
+        nodeStore.upsertUser(nodeNum, channel, modelLastHeard, cfg, false);
         while (nodeStore.size() > MAX_NUM_NODES_VIEW) {
             if (!nodePurgeCandidate(nodeNum))
                 break;
@@ -6018,6 +6072,7 @@ void TFTView_320x240::handleResponse(uint32_t from, const uint32_t id, const mes
                     ILOG_DEBUG("public key mismatch");
                     if (shouldMaintainNodeModel())
                         nodeStore.markBadKey(from);
+                    syncNodeListPresentation();
                     lv_obj_t *panel = nodePanel(from);
                     if (panel) {
                         panel->LV_OBJ_IDX(node_bat_idx)->user_data = (void *)2;
@@ -6169,7 +6224,11 @@ void TFTView_320x240::addNodeToTraceRoute(uint32_t nodeNum, lv_obj_t *panel)
             lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL);
             if (record) {
                 if (nodeNum != ownNode) {
-                    if (panelForNode || useVirtualNodeList)
+                    if (panelForNode
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+                        || useVirtualNodeList
+#endif
+                    )
                         lv_obj_add_event_cb(btn, ui_event_trace_route_node, LV_EVENT_CLICKED,
                                             traceRouteNodeCallbackUserData(nodeNum));
                     lv_label_set_text(label, nodeShortName(nodeNum) ? nodeShortName(nodeNum) : "");
@@ -7544,7 +7603,10 @@ void TFTView_320x240::showMessages(uint32_t nodeNum)
     ) {
         lv_label_set_text(objects.top_messages_node_label, nodeDisplayName(nodeNum) ? nodeDisplayName(nodeNum) : "");
         ui_set_active(objects.messages_button, objects.messages_panel, objects.top_messages_panel);
-        if (nodeHasKey(nodeNum)) {
+        if (nodeHasBadKey(nodeNum)) {
+            lv_obj_set_style_bg_image_src(objects.top_messages_node_image, &img_lock_slash_image,
+                                          LV_PART_MAIN | LV_STATE_DEFAULT);
+        } else if (nodeHasKey(nodeNum)) {
             lv_obj_set_style_bg_image_src(objects.top_messages_node_image, &img_lock_secure_image,
                                           LV_PART_MAIN | LV_STATE_DEFAULT);
         } else {
@@ -7793,7 +7855,7 @@ bool TFTView_320x240::shouldMaintainNodeModel(void) const
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
     return nodeModelEnabled || useVirtualNodeList;
 #else
-    return true;
+    return nodeModelEnabled;
 #endif
 }
 
