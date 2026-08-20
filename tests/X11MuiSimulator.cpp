@@ -117,6 +117,16 @@ int32_t X11MuiSimulator::nodeListScrollYForTesting() const
     return root ? lv_obj_get_scroll_y(root) : 0;
 }
 
+bool X11MuiSimulator::virtualNodeListEnabledForTesting() const
+{
+    return harness && harness->virtualNodeListEnabled();
+}
+
+uint32_t X11MuiSimulator::selectedNodeForTesting() const
+{
+    return harness ? harness->selectedNode() : 0;
+}
+
 void X11MuiSimulator::pointerReadCallback(lv_indev_t *indev, lv_indev_data_t *data)
 {
     auto *simulator = static_cast<X11MuiSimulator *>(lv_indev_get_user_data(indev));

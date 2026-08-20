@@ -253,6 +253,10 @@ endif()
 if(ENABLE_MUI_X11_SIMULATOR)
     find_package(X11 REQUIRED)
     find_package(ZLIB REQUIRED)
+    find_library(XTST_LIBRARY Xtst HINTS /opt/X11/lib /usr/X11/lib /usr/local/lib /opt/homebrew/lib)
+    if(NOT XTST_LIBRARY)
+        message(FATAL_ERROR "Xtst is required for X11 simulator real input exercise")
+    endif()
     target_include_directories(lvgl PUBLIC ${X11_INCLUDE_DIR})
     add_executable(mui_node_list_simulator
         tools/mui_node_list_simulator.cpp
@@ -283,6 +287,7 @@ if(ENABLE_MUI_X11_SIMULATOR)
         protobuf-nanopb-static
         doctest::doctest
         X11::X11
+        ${XTST_LIBRARY}
         ZLIB::ZLIB
     )
     target_compile_definitions(mui_node_list_simulator PRIVATE UNIT_TEST DEVICE_UI_X11_SIMULATOR)

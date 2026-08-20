@@ -1,6 +1,7 @@
 #ifdef USE_X11
 #include "graphics/driver/X11Driver.h"
 #include "util/ILog.h"
+#include <cstdlib>
 #include <stdio.h>
 
 LV_IMG_DECLARE(mouse_cursor_icon);
@@ -22,9 +23,10 @@ void X11Driver::init(DeviceGUI *gui)
     // Initialize LVGL
     DisplayDriver::init(gui);
 
-    char title[25];
-    sprintf(title, "Meshtastic (%dx%d)", screenWidth, screenHeight);
-    display = lv_x11_window_create(title, screenWidth, screenHeight);
+    char defaultTitle[25];
+    sprintf(defaultTitle, "Meshtastic (%dx%d)", screenWidth, screenHeight);
+    const char *title = std::getenv("DEVICE_UI_X11_WINDOW_TITLE");
+    display = lv_x11_window_create(title && title[0] != '\0' ? title : defaultTitle, screenWidth, screenHeight);
     lv_x11_inputs_create(display, &mouse_cursor_icon);
 }
 
