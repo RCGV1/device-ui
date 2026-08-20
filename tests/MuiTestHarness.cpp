@@ -1,13 +1,18 @@
-#ifdef DEVICE_UI_HEADLESS_TEST
+#if defined(DEVICE_UI_HEADLESS_TEST) || defined(DEVICE_UI_X11_SIMULATOR)
 
 #include "MuiTestHarness.h"
+#include "HeadlessDisplayDriver.h"
+#include "graphics/common/MeshtasticView.h"
 #include "graphics/common/ViewFactory.h"
 #include "graphics/driver/DisplayDriverConfig.h"
 #include "graphics/view/TFT/TFTView_320x240.h"
 #include "meshtastic/mesh.pb.h"
 #include "meshtastic/telemetry.pb.h"
 #include <cstring>
+#include <random>
+#include <sstream>
 
+#ifdef DEVICE_UI_HEADLESS_TEST
 const char *firmware_version = "headless-test";
 
 namespace
@@ -19,12 +24,21 @@ HeadlessDisplayDriver &headlessDisplayDriver()
 }
 } // namespace
 
-MuiTestHarness::MuiTestHarness() : driver(&headlessDisplayDriver()), view(nullptr)
+MuiTestHarness::MuiTestHarness()
+    : MuiTestHarness(DisplayDriverConfig(DisplayDriverConfig::device_t::NONE, 320, 240), &headlessDisplayDriver())
 {
-    DisplayDriverConfig config(DisplayDriverConfig::device_t::NONE, 320, 240);
-    view = static_cast<TFTView_320x240 *>(ViewFactory::createForTesting(config, driver));
+}
+#endif
 
-    if (!driver->getDisplay()) {
+MuiTestHarness::MuiTestHarness(const DisplayDriverConfig &config, DisplayDriver *displayDriver)
+    : driver(nullptr), displayDriver(displayDriver), view(nullptr)
+{
+#ifdef DEVICE_UI_HEADLESS_TEST
+    driver = static_cast<HeadlessDisplayDriver *>(displayDriver);
+#endif
+    view = static_cast<TFTView_320x240 *>(ViewFactory::createForTesting(config, displayDriver));
+
+    if (!displayDriver->getDisplay()) {
         view->init(nullptr);
 
         meshtastic_DeviceUIConfig uiConfig{};
@@ -36,7 +50,7 @@ MuiTestHarness::MuiTestHarness() : driver(&headlessDisplayDriver()), view(nullpt
 
 bool MuiTestHarness::ready()
 {
-    return view && driver->getDisplay() && lv_screen_active() && view->nodeListRootForTesting();
+    return view && displayDriver && displayDriver->getDisplay() && lv_screen_active() && view->nodeListRootForTesting();
 }
 
 void MuiTestHarness::resetNodeList()
@@ -123,6 +137,74 @@ void MuiTestHarness::toggleResyncPresentationFixture()
 {
     view->notifyResync(true);
     view->notifyResync(false);
+}
+
+std::vector<MuiNodeFixture> MuiTestHarness::makeLegacyNodeFixtures(size_t count, uint32_t seed, size_t iteration) const
+{
+    constexpr uint32_t now = 1700000000U;
+    std::mt19937 random(seed + static_cast<uint32_t>(iteration * 0x9e3779b9U));
+    std::vector<MuiNodeFixture> fixtures;
+    fixtures.reserve(count);
+
+    for (size_t i = 0; i < count; ++i) {
+        std::ostringstream shortName;
+        shortName << 'N' << std::hex << ((i + random()) & 0xfffU);
+        std::string shortValue = shortName.str().substr(0, 4);
+        while (shortValue.size() < 4) {
+            shortValue.push_back('0');
+        }
+
+        std::string longName;
+        switch (i % 6) {
+        case 0:
+            longName.clear();
+            break;
+        case 1:
+            longName = "Typical Node " + std::to_string(i);
+            break;
+        case 2:
+            longName = "Málaga UTF-8 " + std::to_string(i);
+            break;
+        case 3:
+            longName = "Satellite 🛰 " + std::to_string(i);
+            break;
+        case 4:
+            longName = "123456789012345678901234567890123456789";
+            break;
+        default:
+            longName = "Node " + std::to_string(i);
+            break;
+        }
+
+        const bool offline = i % 4 == 0;
+        fixtures.push_back({
+            static_cast<uint32_t>(0xa0000000U + (iteration << 12U) + i),
+            shortValue,
+            longName,
+            offline ? now - 7200U - static_cast<uint32_t>(i) : now - static_cast<uint32_t>(i),
+            static_cast<uint8_t>(i % 5 == 0 ? MeshtasticView::unknown : i % 7),
+            i % 2 == 0,
+            i % 11 == 0,
+            static_cast<uint8_t>(i % 8),
+            i % 3 == 0,
+            i % 4 == 1,
+        });
+    }
+    return fixtures;
+}
+
+void MuiTestHarness::populateLegacyNodeFixtures(size_t count, uint32_t seed, size_t iteration)
+{
+    resetNodeList();
+    setCurrentTime(1700000000U);
+
+    const auto fixtures = makeLegacyNodeFixtures(count, seed, iteration);
+    for (const auto &fixture : fixtures) {
+        addNodeFixture(fixture.id, fixture.shortName.c_str(), fixture.longName.c_str(), fixture.lastHeard, fixture.role,
+                       fixture.hasKey, fixture.unmessagable, fixture.channel);
+    }
+    showNodesScreen();
+    pump(50);
 }
 
 void MuiTestHarness::scanNodeFilters()

@@ -1,10 +1,13 @@
 #include "HeadlessDisplayDriver.h"
+#include "X11MuiSimulator.h"
+#include "graphics/common/NodeStore.h"
 #include <array>
 #include <cstdint>
 #include <doctest/doctest.h>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <string>
 
 #ifdef DEVICE_UI_HEADLESS_TEST
 TEST_CASE("headless display composes inclusive partial RGB565 flushes into a completed PPM frame")
@@ -37,5 +40,33 @@ TEST_CASE("headless display composes inclusive partial RGB565 flushes into a com
     CHECK(contents.rfind("P6\n320 240\n255\n", 0) == 0);
     CHECK(contents.size() == std::string("P6\n320 240\n255\n").size() + 320 * 240 * 3);
     std::filesystem::remove(ppmPath);
+}
+#endif
+
+#ifdef DEVICE_UI_X11_SIMULATOR
+TEST_CASE("X11 simulator uses shared fixtures and injected pointer input scrolls the production node list")
+{
+    X11MuiSimulator simulator;
+    REQUIRE(simulator.initialize());
+
+    simulator.populateLegacyNodeFixtures(40, 42);
+
+    CHECK(simulator.renderedNodeCountForTesting() == 40);
+    const auto *first = simulator.nodeForTesting(0xa0000000U);
+    REQUIRE(first != nullptr);
+    CHECK(std::string(first->user.short_name) == "Nc66");
+    CHECK(std::string(first->user.long_name).empty());
+    CHECK(first->lastHeard == 1699992800U);
+    CHECK(first->channel == 0);
+
+    const auto before = simulator.nodeListScrollYForTesting();
+    REQUIRE(simulator.injectPointer(160, 210, true));
+    simulator.pump(50);
+    REQUIRE(simulator.injectPointer(160, 40, true));
+    simulator.pump(50);
+    REQUIRE(simulator.injectPointer(160, 40, false));
+    simulator.pump(100);
+
+    CHECK(simulator.nodeListScrollYForTesting() != before);
 }
 #endif

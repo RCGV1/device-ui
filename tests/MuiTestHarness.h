@@ -1,17 +1,36 @@
 #pragma once
 
-#include "HeadlessDisplayDriver.h"
 #include "graphics/common/NodeStore.h"
 #include "graphics/common/VisibleNodeIndex.h"
+#include "graphics/driver/DisplayDriverConfig.h"
+#include "lvgl.h"
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <vector>
 
+class DisplayDriver;
+class HeadlessDisplayDriver;
 class TFTView_320x240;
+
+struct MuiNodeFixture {
+    uint32_t id;
+    std::string shortName;
+    std::string longName;
+    uint32_t lastHeard;
+    uint8_t role;
+    bool hasKey;
+    bool unmessagable;
+    uint8_t channel;
+    bool hasPosition;
+    bool hasTelemetry;
+};
 
 class MuiTestHarness
 {
   public:
     MuiTestHarness();
+    MuiTestHarness(const DisplayDriverConfig &config, DisplayDriver *displayDriver);
 
     bool ready();
     void resetNodeList();
@@ -31,6 +50,8 @@ class MuiTestHarness
     void updateLastHeardFixture(uint32_t nodeId);
     void addActiveChatFixture(uint32_t nodeId, uint8_t channel = 0);
     void toggleResyncPresentationFixture();
+    std::vector<MuiNodeFixture> makeLegacyNodeFixtures(size_t count = 100, uint32_t seed = 42, size_t iteration = 0) const;
+    void populateLegacyNodeFixtures(size_t count = 100, uint32_t seed = 42, size_t iteration = 0);
     void scanNodeFilters();
     void pump(uint32_t elapsedMs = 10);
     size_t objectCount() const;
@@ -49,5 +70,6 @@ class MuiTestHarness
     static size_t countObjects(const lv_obj_t *root);
 
     HeadlessDisplayDriver *driver;
+    DisplayDriver *displayDriver;
     TFTView_320x240 *view;
 };

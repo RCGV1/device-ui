@@ -24,6 +24,10 @@ if(ENABLE_MUI_HEADLESS_TESTS AND NOT ENABLE_DOCTESTS)
     message(FATAL_ERROR "ENABLE_MUI_HEADLESS_TESTS requires ENABLE_DOCTESTS")
 endif()
 
+if(ENABLE_MUI_X11_SIMULATOR AND NOT ENABLE_DOCTESTS)
+    message(FATAL_ERROR "ENABLE_MUI_X11_SIMULATOR requires ENABLE_DOCTESTS")
+endif()
+
 if(MUI_NODE_LIST_SANITIZERS)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
@@ -245,6 +249,7 @@ if(ENABLE_MUI_X11_SIMULATOR)
         tools/mui_node_list_simulator.cpp
         resources/mouse_cursor_icon.c
         tests/X11MuiSimulator.cpp
+        tests/MuiTestHarness.cpp
         tests/HeadlessLinuxHardwareI2C.cpp
         tests/HeadlessPlatform.cpp
     )
@@ -329,6 +334,16 @@ if(ENABLE_DOCTESTS)
             endforeach()
         endif()
     endif()
+    if(ENABLE_MUI_X11_SIMULATOR)
+        target_sources(tests PRIVATE resources/mouse_cursor_icon.c)
+        target_link_libraries(tests PRIVATE PNGdec protobuf-nanopb-static X11::X11 ZLIB::ZLIB)
+        target_compile_definitions(tests PRIVATE UNIT_TEST DEVICE_UI_X11_SIMULATOR)
+        if(APPLE)
+            foreach(PORTDUINO_INCLUDE_DIR IN LISTS PORTDUINO_INCLUDE_DIRS)
+                target_compile_options(tests PRIVATE "-idirafter${PORTDUINO_INCLUDE_DIR}")
+            endforeach()
+        endif()
+    endif()
     target_include_directories(tests PRIVATE 
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -337,7 +352,7 @@ if(ENABLE_DOCTESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/generated/${GENERATED_VIEW}
         ${CMAKE_CURRENT_SOURCE_DIR}/tools
     )
-    if(ENABLE_MUI_HEADLESS_TESTS)
+    if(ENABLE_MUI_HEADLESS_TESTS OR ENABLE_MUI_X11_SIMULATOR)
         target_include_directories(tests PRIVATE ${GENERATED_FILES_DIR} ${CMAKE_CURRENT_BINARY_DIR} ${nanopb_SOURCE_DIR})
     endif()
     set_target_properties(tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -364,5 +379,9 @@ if(ENABLE_DOCTESTS)
                  COMMAND ${CMAKE_COMMAND}
                  -DMUI_NODE_LIST_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator>
                  -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/AssertMuiX11SimulatorRejectsVirtualCandidate.cmake)
+        add_test(NAME MuiX11SimulatorInput
+                 COMMAND ${CMAKE_COMMAND}
+                 -DTESTS_EXECUTABLE=$<TARGET_FILE:tests>
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunMuiX11SimulatorInputTest.cmake)
     endif()
 endif()

@@ -1,15 +1,9 @@
 #ifdef DEVICE_UI_X11_SIMULATOR
 
 #include "X11MuiSimulator.h"
-#include "graphics/common/ViewFactory.h"
 #include "graphics/driver/DisplayDriverFactory.h"
 #include "graphics/driver/X11Driver.h"
-#include "graphics/view/TFT/TFTView_320x240.h"
-#include "meshtastic/mesh.pb.h"
 #include <chrono>
-#include <cstdio>
-#include <cstring>
-#include <random>
 #include <thread>
 
 const char *firmware_version = "x11-simulator";
@@ -27,8 +21,8 @@ DisplayDriver *DisplayDriverFactory::create(const DisplayDriverConfig &config)
 }
 
 X11MuiSimulator::X11MuiSimulator()
-    : config(DisplayDriverConfig::device_t::X11, 320, 240), driver(nullptr), view(nullptr), pointerInput(nullptr),
-      keyboardInput(nullptr), encoderInput(nullptr)
+    : config(DisplayDriverConfig::device_t::X11, 320, 240), driver(nullptr), pointerInput(nullptr), keyboardInput(nullptr),
+      encoderInput(nullptr), originalPointerRead(nullptr), originalKeyboardRead(nullptr), originalEncoderRead(nullptr)
 {
 }
 
@@ -39,12 +33,7 @@ bool X11MuiSimulator::initialize()
     }
 
     driver = &X11Driver::create(320, 240);
-    view = static_cast<TFTView_320x240 *>(ViewFactory::createForTesting(config, driver));
-    view->init(nullptr);
-
-    meshtastic_DeviceUIConfig uiConfig{};
-    uiConfig.version = 1;
-    view->setupUIConfig(uiConfig);
+    harness = std::make_unique<MuiTestHarness>(config, driver);
     scanInputs();
     pump(50);
     return ready();
@@ -52,26 +41,12 @@ bool X11MuiSimulator::initialize()
 
 bool X11MuiSimulator::ready() const
 {
-    return view && driver && driver->getDisplay() && lv_screen_active() && view->nodeListRootForTesting();
+    return harness && harness->ready() && driver && driver->getDisplay() && lv_screen_active();
 }
 
 void X11MuiSimulator::populateLegacyNodeFixtures(size_t count, uint32_t seed)
 {
-    view->resetNodeListForTesting();
-    view->setCurrentTimeForTesting(1700000000U);
-
-    std::mt19937 random(seed);
-    for (size_t index = 0; index < count; ++index) {
-        char shortName[5] = {};
-        char longName[32] = {};
-        std::snprintf(shortName, sizeof(shortName), "N%03x", static_cast<unsigned>((index + random()) & 0xfffU));
-        std::snprintf(longName, sizeof(longName), "Simulator Node %zu", index);
-        view->addNode(static_cast<uint32_t>(0xa1000000U + index), static_cast<uint8_t>(index % 8U), shortName, longName,
-                      1700000000U - static_cast<uint32_t>(index * 17U), static_cast<MeshtasticView::eRole>(index % 7U),
-                      index % 2U == 0, false);
-    }
-    view->showNodesScreenForTesting();
-    pump(50);
+    harness->populateLegacyNodeFixtures(count, seed);
 }
 
 void X11MuiSimulator::pumpUntilClosed()
@@ -88,6 +63,102 @@ void X11MuiSimulator::pump(uint32_t elapsedMs)
     lv_timer_handler();
 }
 
+bool X11MuiSimulator::injectPointer(int16_t x, int16_t y, bool pressed)
+{
+    if (!pointerInput) {
+        return false;
+    }
+    pointerState.point.x = x;
+    pointerState.point.y = y;
+    pointerState.pressed = pressed;
+    pointerState.pending = true;
+    lv_indev_read(pointerInput);
+    return true;
+}
+
+bool X11MuiSimulator::injectKeyboard(uint32_t key)
+{
+    if (!keyboardInput) {
+        return false;
+    }
+    keyState.key = key;
+    keyState.pending = true;
+    lv_indev_read(keyboardInput);
+    return true;
+}
+
+bool X11MuiSimulator::injectEncoder(int16_t diff)
+{
+    if (!encoderInput) {
+        return false;
+    }
+    encoderState.diff = diff;
+    encoderState.pending = true;
+    lv_indev_read(encoderInput);
+    return true;
+}
+
+size_t X11MuiSimulator::renderedNodeCountForTesting() const
+{
+    return harness ? harness->renderedNodeCount() : 0;
+}
+
+const NodeRecord *X11MuiSimulator::nodeForTesting(uint32_t nodeId) const
+{
+    return harness ? harness->node(nodeId) : nullptr;
+}
+
+int32_t X11MuiSimulator::nodeListScrollYForTesting() const
+{
+    auto *root = harness ? harness->nodeListRootForTesting() : nullptr;
+    return root ? lv_obj_get_scroll_y(root) : 0;
+}
+
+void X11MuiSimulator::pointerReadCallback(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    auto *simulator = static_cast<X11MuiSimulator *>(lv_indev_get_user_data(indev));
+    if (!simulator || !simulator->pointerState.pending) {
+        if (simulator && simulator->originalPointerRead) {
+            simulator->originalPointerRead(indev, data);
+        }
+        return;
+    }
+
+    data->point = simulator->pointerState.point;
+    data->state = simulator->pointerState.pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+    simulator->pointerState.pending = false;
+}
+
+void X11MuiSimulator::keyboardReadCallback(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    auto *simulator = static_cast<X11MuiSimulator *>(lv_indev_get_user_data(indev));
+    if (!simulator || !simulator->keyState.pending) {
+        if (simulator && simulator->originalKeyboardRead) {
+            simulator->originalKeyboardRead(indev, data);
+        }
+        return;
+    }
+
+    data->key = simulator->keyState.key;
+    data->state = LV_INDEV_STATE_PRESSED;
+    simulator->keyState.pending = false;
+}
+
+void X11MuiSimulator::encoderReadCallback(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    auto *simulator = static_cast<X11MuiSimulator *>(lv_indev_get_user_data(indev));
+    if (!simulator || !simulator->encoderState.pending) {
+        if (simulator && simulator->originalEncoderRead) {
+            simulator->originalEncoderRead(indev, data);
+        }
+        return;
+    }
+
+    data->enc_diff = simulator->encoderState.diff;
+    data->state = LV_INDEV_STATE_RELEASED;
+    simulator->encoderState.pending = false;
+}
+
 void X11MuiSimulator::scanInputs()
 {
     pointerInput = nullptr;
@@ -97,12 +168,21 @@ void X11MuiSimulator::scanInputs()
         switch (lv_indev_get_type(input)) {
         case LV_INDEV_TYPE_POINTER:
             pointerInput = input;
+            originalPointerRead = lv_indev_get_read_cb(input);
+            lv_indev_set_user_data(input, this);
+            lv_indev_set_read_cb(input, pointerReadCallback);
             break;
         case LV_INDEV_TYPE_KEYPAD:
             keyboardInput = input;
+            originalKeyboardRead = lv_indev_get_read_cb(input);
+            lv_indev_set_user_data(input, this);
+            lv_indev_set_read_cb(input, keyboardReadCallback);
             break;
         case LV_INDEV_TYPE_ENCODER:
             encoderInput = input;
+            originalEncoderRead = lv_indev_get_read_cb(input);
+            lv_indev_set_user_data(input, this);
+            lv_indev_set_read_cb(input, encoderReadCallback);
             break;
         default:
             break;
