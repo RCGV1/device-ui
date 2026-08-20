@@ -14,6 +14,7 @@
 namespace
 {
 VirtualNodeList *activeGroupNavigationList = nullptr;
+constexpr int32_t LEGACY_NODE_LIST_RIGHT_GUTTER = 59;
 
 template <size_t Size> void setRowText(lv_obj_t *label, char (&storage)[Size], const char *text)
 {
@@ -215,7 +216,7 @@ void VirtualNodeList::createRowPool()
         row.panel = lv_obj_create(parentPanel);
         lv_obj_set_pos(row.panel, 0, 0);
         lv_obj_set_size(row.panel, lv_pct(100), COLLAPSED_ROW_HEIGHT);
-        lv_obj_set_align(row.panel, LV_ALIGN_TOP_MID);
+        lv_obj_set_align(row.panel, LV_ALIGN_TOP_LEFT);
         lv_obj_set_style_pad_top(row.panel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_pad_bottom(row.panel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_remove_flag(row.panel, static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE));
@@ -539,7 +540,10 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     lv_label_set_text_static(row.lblSig, row.signalText);
 
     const int32_t height = isExpanded ? EXPANDED_ROW_HEIGHT : COLLAPSED_ROW_HEIGHT;
-    lv_obj_set_size(row.panel, lv_pct(100), height);
+    const int32_t parentWidth = parentPanel ? lv_obj_get_width(parentPanel) : 0;
+    lv_obj_set_size(row.panel,
+                    parentWidth > LEGACY_NODE_LIST_RIGHT_GUTTER ? parentWidth - LEGACY_NODE_LIST_RIGHT_GUTTER : lv_pct(100),
+                    height);
     lv_obj_update_layout(row.panel);
 
     row.positionText[0] = '\0';

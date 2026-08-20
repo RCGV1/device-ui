@@ -721,6 +721,7 @@ MuiRowSnapshot MuiTestHarness::legacyRowSnapshot(uint32_t nodeId) const
         }
 
         lv_obj_t *image = lv_obj_get_child(row, 0);
+        lv_obj_t *signal = lv_obj_get_child(row, 6);
         lv_obj_t *shortName = lv_obj_get_child(row, 3);
         return {
             lv_label_get_text(longName),
@@ -738,6 +739,15 @@ MuiRowSnapshot MuiTestHarness::legacyRowSnapshot(uint32_t nodeId) const
             lv_color_to_u32(lv_obj_get_style_image_recolor(image, LV_PART_MAIN)),
             lv_obj_get_style_image_recolor_opa(image, LV_PART_MAIN),
             reinterpret_cast<uintptr_t>(lv_image_get_src(image)),
+            lv_color_to_u32(lv_obj_get_style_bg_color(row, LV_PART_MAIN)),
+            lv_color_to_u32(lv_obj_get_style_border_color(row, LV_PART_MAIN)),
+            lv_obj_get_x(image),
+            lv_obj_get_y(image),
+            lv_obj_get_x(longName),
+            lv_obj_get_y(longName),
+            lv_obj_get_x(shortName),
+            lv_obj_get_x(signal),
+            lv_obj_get_y(signal),
         };
     }
     return {};

@@ -53,6 +53,15 @@ struct MuiRowSnapshot {
     uint32_t imageRecolor = 0;
     uint8_t imageRecolorOpa = 0;
     uintptr_t imageSrc = 0;
+    uint32_t rowBg = 0;
+    uint32_t rowBorder = 0;
+    int32_t imageX = 0;
+    int32_t imageY = 0;
+    int32_t longNameX = 0;
+    int32_t longNameY = 0;
+    int32_t shortNameX = 0;
+    int32_t signalX = 0;
+    int32_t signalY = 0;
 };
 
 class MuiTestHarness

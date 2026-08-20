@@ -375,6 +375,10 @@ if(ENABLE_DOCTESTS)
         add_test(NAME MuiNodeListIntegration COMMAND tests
                  "--test-case=*headless display*,*view updates model*,*node model*,*unknown ingress*,*last-heard updates*")
         add_test(NAME NodeListBenchmark COMMAND tests "--test-case=*baseline benchmark emits list diagnostics*")
+        add_test(NAME NodeListScrollTelemetry
+                 COMMAND ${CMAKE_COMMAND}
+                         -DNODE_LIST_BENCH=$<TARGET_FILE:node_list_bench>
+                         -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_node_list_scroll_telemetry.cmake)
         foreach(NODE_LIST_BENCHMARK_NODE_COUNT 25 100 250)
             add_test(NAME VirtualNodeListAllocator${NODE_LIST_BENCHMARK_NODE_COUNT}
                      COMMAND node_list_bench

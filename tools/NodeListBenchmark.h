@@ -26,6 +26,16 @@ struct NodeListDurationSummary {
     uint64_t maximum = 0;
 };
 
+struct NodeListScrollTelemetry {
+    size_t cycles = 0;
+    size_t rowsPerCycle = 0;
+    size_t sampleCount = 0;
+    size_t frameCount = 0;
+    uint64_t elapsedNs = 0;
+    double averageFps = 0;
+    uint64_t worstFrameNs = 0;
+};
+
 struct NodeListAllocatorSnapshot {
     size_t freeSize = 0;
     size_t biggestFreeBlock = 0;
@@ -140,6 +150,7 @@ struct NodeListBenchmarkReport {
         std::optional<NodeListDurationSummary> filterNs;
         std::optional<NodeListDurationSummary> virtualRefreshNs;
     } timing;
+    NodeListScrollTelemetry scrollTelemetry;
     struct {
         bool ready = false;
         bool requestedNodeCount = false;

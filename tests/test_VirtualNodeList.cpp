@@ -47,7 +47,9 @@ bool childHidden(lv_obj_t *row, uint32_t childIndex)
 MuiRowSnapshot snapshotVirtualRow(lv_obj_t *row)
 {
     lv_obj_t *image = lv_obj_get_child(row, 0);
+    lv_obj_t *longName = lv_obj_get_child(row, 2);
     lv_obj_t *shortName = lv_obj_get_child(row, 3);
+    lv_obj_t *signal = lv_obj_get_child(row, 6);
     return {
         labelText(row, 2),
         labelText(row, 3),
@@ -64,7 +66,67 @@ MuiRowSnapshot snapshotVirtualRow(lv_obj_t *row)
         lv_color_to_u32(lv_obj_get_style_image_recolor(image, LV_PART_MAIN)),
         lv_obj_get_style_image_recolor_opa(image, LV_PART_MAIN),
         reinterpret_cast<uintptr_t>(lv_image_get_src(image)),
+        lv_color_to_u32(lv_obj_get_style_bg_color(row, LV_PART_MAIN)),
+        lv_color_to_u32(lv_obj_get_style_border_color(row, LV_PART_MAIN)),
+        lv_obj_get_x(image),
+        lv_obj_get_y(image),
+        lv_obj_get_x(longName),
+        lv_obj_get_y(longName),
+        lv_obj_get_x(shortName),
+        lv_obj_get_x(signal),
+        lv_obj_get_y(signal),
     };
+}
+
+NodeId visibleLegacyNodeAt(MuiTestHarness &harness, size_t visibleIndex)
+{
+    lv_obj_t *root = harness.nodeListRootForTesting();
+    REQUIRE(root != nullptr);
+
+    size_t seen = 0;
+    const uint32_t childCount = lv_obj_get_child_count(root);
+    for (uint32_t index = 0; index < childCount; ++index) {
+        lv_obj_t *row = lv_obj_get_child(root, static_cast<int32_t>(index));
+        if (!row || lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN) || lv_obj_get_child_count(row) < 11) {
+            continue;
+        }
+        const NodeId nodeId = static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(lv_obj_get_child(row, 2))));
+        if (!nodeId) {
+            continue;
+        }
+        if (seen == visibleIndex) {
+            return nodeId;
+        }
+        ++seen;
+    }
+
+    FAIL("visible legacy row not found");
+    return 0;
+}
+
+NodeId visibleVirtualNodeAt(lv_obj_t *root, size_t visibleIndex)
+{
+    REQUIRE(root != nullptr);
+
+    size_t seen = 0;
+    const uint32_t childCount = lv_obj_get_child_count(root);
+    for (uint32_t index = 0; index < childCount; ++index) {
+        lv_obj_t *row = lv_obj_get_child(root, static_cast<int32_t>(index));
+        if (!row || lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN)) {
+            continue;
+        }
+        const NodeId nodeId = static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(row)));
+        if (!nodeId) {
+            continue;
+        }
+        if (seen == visibleIndex) {
+            return nodeId;
+        }
+        ++seen;
+    }
+
+    FAIL("visible virtual row not found");
+    return 0;
 }
 
 MuiRowSnapshot syncVirtualSnapshotFromLegacy(MuiTestHarness &legacy, NodeId nodeId, NodeId expanded = 0, NodeId ownNode = 0)
@@ -418,6 +480,65 @@ TEST_CASE("VirtualNodeList matches legacy event-driven row text and distance pre
     CHECK(virtualRow.position2 == legacyRow.position2);
     CHECK(virtualRow.telemetry1 == legacyRow.telemetry1);
     CHECK(virtualRow.telemetry2 == legacyRow.telemetry2);
+}
+
+TEST_CASE("VirtualNodeList matches the same legacy row visual contract at the same viewport position")
+{
+    MuiTestHarness legacy;
+    legacy.resetNodeList();
+    legacy.enableVirtualNodeModelFixture();
+    legacy.setCurrentTime(1700000000U);
+
+    constexpr NodeId target = 0x10000001U;
+    legacy.addNodeFixture(0x10000003U, "LOW3", "Lower Three", 1699999700U, MeshtasticView::client, true, false, 0);
+    legacy.addNodeFixture(target, "TOP1", "Top Visual Node", 1699999900U, MeshtasticView::router, false, false, 0);
+    legacy.addNodeFixture(0x10000002U, "LOW2", "Lower Two", 1699999800U, MeshtasticView::client, true, false, 0);
+    legacy.updateHopsFixture(target, 2);
+    legacy.pump();
+
+    lv_obj_t *virtualRoot = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(virtualRoot, 320, 240);
+    lv_obj_set_style_layout(virtualRoot, LV_LAYOUT_NONE, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    MuiRowSnapshot legacyRow;
+    MuiRowSnapshot virtualRow;
+    {
+        DummyActionSink sink;
+        VirtualNodeList list(virtualRoot, sink);
+        VisibleNodeIndex index;
+        NodeListFilter filter;
+        index.rebuild(legacy.store(), filter, 0, NodeListFilterPolicy::LegacyCompatible);
+        list.sync(legacy.store(), index, 0, 1700000000U);
+        legacy.pump();
+
+        CHECK(visibleLegacyNodeAt(legacy, 0) == target);
+        CHECK(visibleVirtualNodeAt(virtualRoot, 0) == target);
+
+        lv_obj_t *row = boundRow(virtualRoot, target);
+        REQUIRE(row != nullptr);
+        legacyRow = legacy.legacyRowSnapshot(target);
+        virtualRow = snapshotVirtualRow(row);
+    }
+    lv_obj_delete(virtualRoot);
+
+    CHECK(virtualRow.longName == legacyRow.longName);
+    CHECK(virtualRow.shortName == legacyRow.shortName);
+    CHECK(virtualRow.signal == legacyRow.signal);
+    CHECK(virtualRow.imageSrc == legacyRow.imageSrc);
+    CHECK(virtualRow.rowBg == legacyRow.rowBg);
+    CHECK(virtualRow.rowBorder == legacyRow.rowBorder);
+    CHECK(virtualRow.imageBg == legacyRow.imageBg);
+    CHECK(virtualRow.imageBorder == legacyRow.imageBorder);
+    CHECK(virtualRow.imageRecolor == legacyRow.imageRecolor);
+    CHECK(virtualRow.imageRecolorOpa == legacyRow.imageRecolorOpa);
+    CHECK(virtualRow.imageX == legacyRow.imageX);
+    CHECK(virtualRow.imageY == legacyRow.imageY);
+    CHECK(virtualRow.longNameX == legacyRow.longNameX);
+    CHECK(virtualRow.longNameY == legacyRow.longNameY);
+    CHECK(virtualRow.shortNameX == legacyRow.shortNameX);
+    CHECK(virtualRow.shortNameY == legacyRow.shortNameY);
+    CHECK(virtualRow.signalX == legacyRow.signalX);
+    CHECK(virtualRow.signalY == legacyRow.signalY);
 }
 
 TEST_CASE("VirtualNodeList matches legacy signal label event order")

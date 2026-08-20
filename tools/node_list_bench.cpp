@@ -15,12 +15,14 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <memory>
 #include <random>
 #include <sstream>
 #include <string_view>
+#include <utility>
 
 #ifndef DEVICE_UI_SOURCE_REVISION
 #define DEVICE_UI_SOURCE_REVISION "unknown"
@@ -70,6 +72,33 @@ template <typename Function> uint64_t measureNs(Function &&function)
     function();
     const auto finish = Clock::now();
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(finish - start).count());
+}
+
+template <typename Function> void recordScrollFrame(NodeListScrollTelemetry &telemetry, Function &&function)
+{
+    const uint64_t elapsed = measureNs(std::forward<Function>(function));
+    telemetry.elapsedNs += elapsed;
+    telemetry.sampleCount++;
+    telemetry.frameCount++;
+    telemetry.worstFrameNs = std::max(telemetry.worstFrameNs, elapsed);
+}
+
+void mergeScrollTelemetry(NodeListScrollTelemetry &total, const NodeListScrollTelemetry &trial)
+{
+    total.cycles += trial.cycles;
+    total.rowsPerCycle = trial.rowsPerCycle;
+    total.sampleCount += trial.sampleCount;
+    total.frameCount += trial.frameCount;
+    total.elapsedNs += trial.elapsedNs;
+    total.worstFrameNs = std::max(total.worstFrameNs, trial.worstFrameNs);
+}
+
+void finalizeScrollTelemetry(NodeListScrollTelemetry &telemetry)
+{
+    if (telemetry.elapsedNs != 0) {
+        telemetry.averageFps =
+            static_cast<double>(telemetry.frameCount) * 1'000'000'000.0 / static_cast<double>(telemetry.elapsedNs);
+    }
 }
 
 std::vector<NodeFixture> makeFixtures(size_t count, uint32_t seed, size_t iteration)
@@ -513,6 +542,7 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
     std::vector<uint64_t> reorderSamples;
     std::vector<uint64_t> filterSamples;
     std::vector<uint64_t> virtualRefreshSamples;
+    NodeListScrollTelemetry scrollTelemetry;
     bool nodeCountOk = true;
     bool duplicateUpdateOk = true;
     bool changedNameAndRoleOk = true;
@@ -572,6 +602,8 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
         uint64_t reorderNs = 0;
         uint64_t filterNs = 0;
         uint64_t virtualRefreshNs = 0;
+        NodeListScrollTelemetry trialScrollTelemetry;
+        trialScrollTelemetry.rowsPerCycle = fixtures.size();
         for (size_t cycle = 0; cycle < measuredCycleCount; ++cycle) {
             allocatorTrial.cycleCount++;
             auto orderedCycle = fixtures;
@@ -658,6 +690,16 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
                 list->scrollTo(changed.id, LV_ANIM_OFF);
                 harness.pump();
             });
+            trialScrollTelemetry.cycles++;
+            for (size_t sample = 0; sample < fixtures.size(); ++sample) {
+                const size_t fixtureIndex = cycle % 2 == 0 ? sample : fixtures.size() - 1 - sample;
+                recordScrollFrame(trialScrollTelemetry, [&] {
+                    list->scrollTo(fixtures[fixtureIndex].id, LV_ANIM_OFF);
+                    harness.pump();
+                });
+            }
+            list->scrollTo(changed.id, LV_ANIM_OFF);
+            harness.pump();
             virtualRefreshNs +=
                 recordOperation(allocatorTrial, harness, "presentation_resync", [&](auto &operation) { sync(&operation); });
             presentationOk = presentationOk && hasPresentedNode(container, changed.id, "Duplicate Final");
@@ -705,6 +747,7 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
             reorderSamples.push_back(reorderNs);
             filterSamples.push_back(filterNs);
             virtualRefreshSamples.push_back(virtualRefreshNs);
+            mergeScrollTelemetry(scrollTelemetry, trialScrollTelemetry);
         }
     }
 
@@ -713,6 +756,8 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
     report.timing.reorderInsertNs = summarize(std::move(reorderSamples));
     report.timing.filterNs = summarize(std::move(filterSamples));
     report.timing.virtualRefreshNs = summarize(std::move(virtualRefreshSamples));
+    finalizeScrollTelemetry(scrollTelemetry);
+    report.scrollTelemetry = scrollTelemetry;
     report.allocatorTelemetry = std::move(allocatorTelemetry);
     report.lvgl.totalObjects = harness.objectCount();
     report.lvgl.nodeListObjects = harness.nodeListObjectCount();
@@ -811,6 +856,7 @@ NodeListBenchmarkReport runNodeListBenchmark(const NodeListBenchmarkOptions &opt
     std::vector<uint64_t> updateSamples;
     std::vector<uint64_t> reorderSamples;
     std::vector<uint64_t> filterSamples;
+    NodeListScrollTelemetry scrollTelemetry;
     bool nodeCountOk = true;
     bool duplicateUpdateOk = true;
     bool changedNameAndRoleOk = true;
@@ -853,6 +899,8 @@ NodeListBenchmarkReport runNodeListBenchmark(const NodeListBenchmarkOptions &opt
         uint64_t updateNs = 0;
         uint64_t reorderNs = 0;
         uint64_t filterNs = 0;
+        NodeListScrollTelemetry trialScrollTelemetry;
+        trialScrollTelemetry.rowsPerCycle = fixtures.size();
         for (size_t cycle = 0; cycle < measuredCycleCount; ++cycle) {
             allocatorTrial.cycleCount++;
             auto orderedCycle = fixtures;
@@ -926,6 +974,15 @@ NodeListBenchmarkReport runNodeListBenchmark(const NodeListBenchmarkOptions &opt
                 lv_obj_scroll_to_y(harness.legacyNodeListRootForTesting(), 120, LV_ANIM_OFF);
                 harness.pump();
             });
+            trialScrollTelemetry.cycles++;
+            for (size_t sample = 0; sample < fixtures.size(); ++sample) {
+                const size_t fixtureIndex = cycle % 2 == 0 ? sample : fixtures.size() - 1 - sample;
+                recordScrollFrame(trialScrollTelemetry, [&] {
+                    lv_obj_scroll_to_y(harness.legacyNodeListRootForTesting(), static_cast<int32_t>(fixtureIndex * 48U),
+                                       LV_ANIM_OFF);
+                    harness.pump();
+                });
+            }
 
             recordOperation(allocatorTrial, harness, "presentation_resync",
                             [&](auto &) { harness.toggleResyncPresentationFixture(); });
@@ -990,6 +1047,7 @@ NodeListBenchmarkReport runNodeListBenchmark(const NodeListBenchmarkOptions &opt
             updateSamples.push_back(updateNs);
             reorderSamples.push_back(reorderNs);
             filterSamples.push_back(filterNs);
+            mergeScrollTelemetry(scrollTelemetry, trialScrollTelemetry);
         }
     }
 
@@ -997,6 +1055,8 @@ NodeListBenchmarkReport runNodeListBenchmark(const NodeListBenchmarkOptions &opt
     report.timing.updateNs = summarize(std::move(updateSamples));
     report.timing.reorderInsertNs = summarize(std::move(reorderSamples));
     report.timing.filterNs = summarize(std::move(filterSamples));
+    finalizeScrollTelemetry(scrollTelemetry);
+    report.scrollTelemetry = scrollTelemetry;
     report.allocatorTelemetry = std::move(allocatorTelemetry);
     report.lvgl.totalObjects = harness.objectCount();
     report.lvgl.nodeListObjects = harness.nodeListObjectCount();
@@ -1065,6 +1125,12 @@ bool writeNodeListBenchmarkJson(const NodeListBenchmarkReport &report, const std
            << ", \"used_percent\": " << static_cast<unsigned>(report.memory.usedPercent)
            << ", \"fragmentation_percent\": " << static_cast<unsigned>(report.memory.fragmentationPercent)
            << ", \"integrity_ok\": " << (report.memory.integrityOk ? "true" : "false") << "},\n"
+           << "  \"scroll_telemetry\": {\"cycles\": " << report.scrollTelemetry.cycles
+           << ", \"rows_per_cycle\": " << report.scrollTelemetry.rowsPerCycle
+           << ", \"sample_count\": " << report.scrollTelemetry.sampleCount
+           << ", \"frame_count\": " << report.scrollTelemetry.frameCount
+           << ", \"elapsed_ns\": " << report.scrollTelemetry.elapsedNs << ", \"average_fps\": " << std::setprecision(12)
+           << report.scrollTelemetry.averageFps << ", \"worst_frame_ns\": " << report.scrollTelemetry.worstFrameNs << "},\n"
            << "  \"allocator_telemetry\": ";
     if (report.allocatorTelemetry.has_value()) {
         const auto &telemetry = report.allocatorTelemetry.value();
