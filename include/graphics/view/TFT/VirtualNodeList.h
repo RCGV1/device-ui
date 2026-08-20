@@ -67,6 +67,7 @@ class VirtualNodeList
     void scrollTo(NodeId id, lv_anim_enable_t anim = LV_ANIM_OFF);
     void focus(NodeId id);
     size_t boundRowCount() const { return rowPool.size(); }
+    uint32_t bindGenerationForTesting() const { return bindGeneration; }
 
     void refreshVisibleRows();
 
@@ -90,4 +91,5 @@ class VirtualNodeList
 
     std::vector<ReusableRow> rowPool;
     std::vector<int32_t> prefixHeights;
+    uint32_t bindGeneration = 0;
 };

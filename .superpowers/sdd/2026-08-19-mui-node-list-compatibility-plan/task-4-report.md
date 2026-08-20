@@ -117,3 +117,47 @@ PATH=build-task4-python/bin:$PATH ctest --test-dir build-task4-virtual --output-
   - last-heard reorder of the first rendered row;
   - presentation resync preserving and re-rendering the virtual host;
   - purge removing the oldest node and rebinding visible rows.
+
+## Review Fix Round 2
+
+### RED
+
+Added narrow gate-on assertions that observe actual virtual row binding generation immediately around the two previously under-proven operations:
+
+- `addActiveChatFixture()` must advance/rebind the virtual list before any later insertion or purge.
+- `toggleResyncPresentationFixture()` must advance/rebind the virtual list even when visible state is unchanged.
+
+Initial RED:
+
+```text
+cmake --build build-task4-virtual --target tests
+error: no member named 'virtualNodeListBindGeneration' in 'MuiTestHarness'
+```
+
+### GREEN
+
+Implemented a test-observable bind generation counter in `VirtualNodeList::bindRow()` and exposed it through TFTView/MuiTestHarness test hooks. The counter advances only when virtual rows are actually rebound.
+
+Focused gate-on test:
+
+```text
+build-task4-virtual/bin/tests "--test-case=*gated virtual node list renders mutation resyncs*"
+test cases: 1 | 1 passed | 0 failed
+assertions: 30 | 30 passed | 0 failed
+```
+
+Default-off full suite:
+
+```text
+PATH=build-task4-python/bin:$PATH cmake --build build-task4-red3 --target tests node_list_bench
+PATH=build-task4-python/bin:$PATH ctest --test-dir build-task4-red3 --output-on-failure
+100% tests passed, 0 tests failed out of 9
+```
+
+Gate-on full suite:
+
+```text
+PATH=build-task4-python/bin:$PATH cmake --build build-task4-virtual --target tests node_list_bench
+PATH=build-task4-python/bin:$PATH ctest --test-dir build-task4-virtual --output-on-failure
+100% tests passed, 0 tests failed out of 9
+```

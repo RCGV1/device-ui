@@ -305,6 +305,11 @@ bool MuiTestHarness::virtualNodeListEnabled() const
     return view->virtualNodeListEnabledForTesting();
 }
 
+uint32_t MuiTestHarness::virtualNodeListBindGeneration() const
+{
+    return view->virtualNodeListBindGenerationForTesting();
+}
+
 size_t MuiTestHarness::legacyRetainedNodeCount() const
 {
     return view->legacyRetainedNodeCountForTesting();

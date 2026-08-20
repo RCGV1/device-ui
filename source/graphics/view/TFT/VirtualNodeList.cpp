@@ -406,6 +406,7 @@ void VirtualNodeList::focus(NodeId id)
 
 void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool isExpanded)
 {
+    bindGeneration++;
     row.boundId = record.id;
     lv_obj_set_user_data(row.panel, reinterpret_cast<void *>(static_cast<uintptr_t>(record.id)));
     lv_obj_set_user_data(row.btn, reinterpret_cast<void *>(static_cast<uintptr_t>(record.id)));

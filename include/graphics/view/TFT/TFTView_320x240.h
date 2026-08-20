@@ -141,6 +141,7 @@ class TFTView_320x240 : public MeshtasticView
     void enableVirtualNodeListForTesting();
     void setOfflineFilterForTesting(bool enabled);
     bool virtualNodeListEnabledForTesting() const;
+    uint32_t virtualNodeListBindGenerationForTesting() const;
     size_t legacyRetainedNodeCountForTesting() const;
 #endif
 

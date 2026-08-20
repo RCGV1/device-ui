@@ -512,6 +512,15 @@ bool TFTView_320x240::virtualNodeListEnabledForTesting() const
 #endif
 }
 
+uint32_t TFTView_320x240::virtualNodeListBindGenerationForTesting() const
+{
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    return virtualNodeList ? virtualNodeList->bindGenerationForTesting() : 0;
+#else
+    return 0;
+#endif
+}
+
 size_t TFTView_320x240::legacyRetainedNodeCountForTesting() const
 {
     return nodes.size();

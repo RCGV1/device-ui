@@ -319,8 +319,12 @@ TEST_CASE("gated virtual node list renders mutation resyncs")
     {
         harness.addNodeFixture(0x11111111, "KEEP", "Active Chat Node", 1U);
         harness.addNodeFixture(0x22222222, "DROP", "Purge Candidate", 2U);
+        const uint32_t bindsBeforeActiveChat = harness.virtualNodeListBindGeneration();
 
         harness.addActiveChatFixture(0x11111111);
+        const uint32_t bindsAfterActiveChat = harness.virtualNodeListBindGeneration();
+
+        CHECK(bindsAfterActiveChat > bindsBeforeActiveChat);
         harness.addUntilPurgeFixture(249);
 
         CHECK(harness.node(0x11111111) != nullptr);
@@ -347,9 +351,11 @@ TEST_CASE("gated virtual node list renders mutation resyncs")
     {
         harness.addNodeFixture(0x11111111, "ONE", "One Node", 1699999900U);
         lv_obj_t *host = harness.nodeListRootForTesting();
+        const uint32_t bindsBeforeResync = harness.virtualNodeListBindGeneration();
 
         harness.toggleResyncPresentationFixture();
 
+        CHECK(harness.virtualNodeListBindGeneration() > bindsBeforeResync);
         CHECK(harness.nodeListRootForTesting() == host);
         CHECK(virtualRowSnapshot(harness, 0x11111111).longName == "One Node");
         CHECK(renderedVirtualNodeAt(harness, 0) == 0x11111111);

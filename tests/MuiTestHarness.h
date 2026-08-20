@@ -92,6 +92,7 @@ class MuiTestHarness
     size_t nodeListObjectCount() const;
     size_t renderedNodeCount() const;
     bool virtualNodeListEnabled() const;
+    uint32_t virtualNodeListBindGeneration() const;
     size_t legacyRetainedNodeCount() const;
     const char *nodeLongName(uint32_t nodeId) const;
     uint8_t nodeRole(uint32_t nodeId) const;
