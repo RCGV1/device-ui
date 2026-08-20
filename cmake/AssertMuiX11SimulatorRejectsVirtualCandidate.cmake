@@ -6,12 +6,12 @@ execute_process(
 )
 
 if(simulator_result EQUAL 0)
-    message(FATAL_ERROR "expected virtual_candidate to be rejected")
+    message(FATAL_ERROR "expected virtual_candidate to be rejected when the virtual gate is off")
 endif()
 
 set(simulator_combined_output "${simulator_output}${simulator_error}")
-if(NOT simulator_combined_output MATCHES "virtual_candidate is not integrated")
-    message(FATAL_ERROR "missing virtual_candidate not-integrated diagnostic: ${simulator_combined_output}")
+if(NOT simulator_combined_output MATCHES "virtual_candidate requires ENABLE_MUI_VIRTUAL_NODE_LIST")
+    message(FATAL_ERROR "missing virtual_candidate gate diagnostic: ${simulator_combined_output}")
 endif()
 
 message(STATUS "${simulator_combined_output}")

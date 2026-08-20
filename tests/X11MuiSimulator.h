@@ -13,9 +13,14 @@ class X11Driver;
 class X11MuiSimulator
 {
   public:
+    enum class Implementation {
+        Legacy,
+        VirtualCandidate,
+    };
+
     X11MuiSimulator();
 
-    bool initialize();
+    bool initialize(Implementation implementation = Implementation::Legacy);
     bool ready() const;
     void populateLegacyNodeFixtures(size_t count = 100, uint32_t seed = 42);
     void pumpUntilClosed();

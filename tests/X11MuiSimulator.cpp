@@ -26,7 +26,7 @@ X11MuiSimulator::X11MuiSimulator()
 {
 }
 
-bool X11MuiSimulator::initialize()
+bool X11MuiSimulator::initialize(Implementation implementation)
 {
     if (ready()) {
         return true;
@@ -34,6 +34,9 @@ bool X11MuiSimulator::initialize()
 
     driver = &X11Driver::create(320, 240);
     harness = std::make_unique<MuiTestHarness>(config, driver);
+    if (implementation == Implementation::VirtualCandidate) {
+        harness->enableVirtualNodeListFixture();
+    }
     scanInputs();
     pump(50);
     return ready();

@@ -29,8 +29,8 @@ if(ENABLE_MUI_X11_SIMULATOR AND NOT ENABLE_DOCTESTS)
     message(FATAL_ERROR "ENABLE_MUI_X11_SIMULATOR requires ENABLE_DOCTESTS")
 endif()
 
-if(ENABLE_MUI_VIRTUAL_NODE_LIST AND NOT ENABLE_MUI_HEADLESS_TESTS)
-    message(FATAL_ERROR "ENABLE_MUI_VIRTUAL_NODE_LIST is test/development-only and requires ENABLE_MUI_HEADLESS_TESTS")
+if(ENABLE_MUI_VIRTUAL_NODE_LIST AND NOT (ENABLE_MUI_HEADLESS_TESTS OR ENABLE_MUI_X11_SIMULATOR))
+    message(FATAL_ERROR "ENABLE_MUI_VIRTUAL_NODE_LIST is test/development-only and requires ENABLE_MUI_HEADLESS_TESTS or ENABLE_MUI_X11_SIMULATOR")
 endif()
 
 if(MUI_NODE_LIST_SANITIZERS)
@@ -58,13 +58,14 @@ add_compile_definitions(ARCH_PORTDUINO)
 add_compile_definitions(ARDUINO)
 add_compile_definitions(VIEW_320x240)
 
+if(ENABLE_MUI_VIRTUAL_NODE_LIST)
+    add_compile_definitions(DEVICE_UI_MUI_VIRTUAL_NODE_LIST)
+endif()
+
 if(ENABLE_MUI_HEADLESS_TESTS)
     add_compile_definitions(DEVICE_UI_HEADLESS_TEST)
     add_compile_definitions(HAS_TFT=1)
     add_compile_definitions(RAM_SIZE=16384)
-    if(ENABLE_MUI_VIRTUAL_NODE_LIST)
-        add_compile_definitions(DEVICE_UI_MUI_VIRTUAL_NODE_LIST)
-    endif()
     set(CONFIG_LV_BUILD_DEMOS OFF CACHE BOOL "Build LVGL demos" FORCE)
     set(CONFIG_LV_BUILD_EXAMPLES OFF CACHE BOOL "Build LVGL examples" FORCE)
 elseif(ENABLE_MUI_X11_SIMULATOR)
@@ -383,13 +384,20 @@ if(ENABLE_DOCTESTS)
         add_test(NAME VirtualNodeList COMMAND tests "--test-case=*VirtualNodeList*")
     endif()
     if(ENABLE_MUI_X11_SIMULATOR)
-        add_test(NAME MuiX11SimulatorRejectsVirtualCandidate
-                 COMMAND ${CMAKE_COMMAND}
-                 -DMUI_NODE_LIST_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator>
-                 -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/AssertMuiX11SimulatorRejectsVirtualCandidate.cmake)
         add_test(NAME MuiX11SimulatorInput
                  COMMAND ${CMAKE_COMMAND}
                  -DTESTS_EXECUTABLE=$<TARGET_FILE:tests>
                  -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunMuiX11SimulatorInputTest.cmake)
+        if(ENABLE_MUI_VIRTUAL_NODE_LIST)
+            add_test(NAME MuiX11SimulatorPairLaunch
+                     COMMAND ${CMAKE_COMMAND}
+                     -DMUI_NODE_LIST_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator>
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunMuiX11SimulatorPairLaunchTest.cmake)
+        else()
+            add_test(NAME MuiX11SimulatorRejectsVirtualCandidate
+                     COMMAND ${CMAKE_COMMAND}
+                     -DMUI_NODE_LIST_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator>
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/AssertMuiX11SimulatorRejectsVirtualCandidate.cmake)
+        endif()
     endif()
 endif()

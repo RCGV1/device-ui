@@ -3,6 +3,7 @@
 #include "graphics/common/NodeStore.h"
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <doctest/doctest.h>
 #include <filesystem>
 #include <fstream>
@@ -46,6 +47,11 @@ TEST_CASE("headless display composes inclusive partial RGB565 flushes into a com
 #ifdef DEVICE_UI_X11_SIMULATOR
 TEST_CASE("X11 simulator uses shared fixtures and injected pointer input scrolls the production node list")
 {
+    const char *display = std::getenv("DISPLAY");
+    if (!display || display[0] == '\0') {
+        return;
+    }
+
     X11MuiSimulator simulator;
     REQUIRE(simulator.initialize());
 
