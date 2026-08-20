@@ -138,8 +138,14 @@ class TFTView_320x240 : public MeshtasticView
     void sendDirectTextForTesting(NodeId id, char *msg);
     uint8_t nodeHopLimitForTesting(NodeId id, int8_t unknownHops) const;
     uintptr_t traceRouteNodeCallbackPayloadForTesting(NodeId id) const;
+    uint32_t selectedNodeForTesting() const;
+    bool messagesPanelVisibleForTesting() const;
+    bool mapPanelVisibleForTesting() const;
+    void sendActiveTextForTesting(char *msg);
+    void focusVirtualNodeForTesting(NodeId id);
     void enableVirtualNodeListForTesting();
     void setOfflineFilterForTesting(bool enabled);
+    void setPositionFilterForTesting(bool enabled);
     bool virtualNodeListEnabledForTesting() const;
     uint32_t virtualNodeListBindGenerationForTesting() const;
     size_t legacyRetainedNodeCountForTesting() const;
@@ -297,9 +303,10 @@ class TFTView_320x240 : public MeshtasticView
     void syncNodeListPresentation(void);
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
     void ensureVirtualNodeList(void);
-    void nodeClicked(NodeId id) override {}
-    void nodeLongPressed(NodeId id) override {}
-    void nodeFocused(NodeId id) override {}
+    void nodeClicked(NodeId id) override;
+    void nodeLongPressed(NodeId id) override;
+    void nodeFocused(NodeId id) override;
+    void nodePositionClicked(NodeId id) override;
 #endif
     void updateGroupChannel(uint8_t chId);
 

@@ -83,6 +83,7 @@ class MuiTestHarness
     void toggleResyncPresentationFixture();
     void enableVirtualNodeListFixture();
     void setOfflineFilterFixture(bool enabled);
+    void setPositionFilterFixture(bool enabled);
     void addUntilPurgeFixture(size_t count);
     std::vector<MuiNodeFixture> makeLegacyNodeFixtures(size_t count = 100, uint32_t seed = 42, size_t iteration = 0) const;
     void populateLegacyNodeFixtures(size_t count = 100, uint32_t seed = 42, size_t iteration = 0);
@@ -121,6 +122,12 @@ class MuiTestHarness
     MuiControllerCall lastPositionRequest() const;
     MuiControllerCall lastTextMessage() const;
     MuiControllerCall lastTraceRoute() const;
+    uint32_t selectedNode() const;
+    bool messagesPanelVisible() const;
+    bool mapPanelVisible() const;
+    void dispatchVirtualNodeEvent(uint32_t nodeId, lv_event_code_t eventCode);
+    void dispatchVirtualNodePositionEvent(uint32_t nodeId);
+    void sendActiveText(const char *msg);
     const NodeStore &store() const;
     const VisibleNodeIndex &visibleIndex() const;
     MuiRowSnapshot legacyRowSnapshot(uint32_t nodeId) const;

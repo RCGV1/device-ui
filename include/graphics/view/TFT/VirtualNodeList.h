@@ -14,6 +14,7 @@ class NodeListActionSink
     virtual void nodeClicked(NodeId id) = 0;
     virtual void nodeLongPressed(NodeId id) = 0;
     virtual void nodeFocused(NodeId id) = 0;
+    virtual void nodePositionClicked(NodeId id) {}
     virtual ~NodeListActionSink() = default;
 };
 
@@ -78,6 +79,7 @@ class VirtualNodeList
 
     static void scrollEventCallback(lv_event_t *e);
     static void rowClickCallback(lv_event_t *e);
+    static void rowPositionCallback(lv_event_t *e);
 
     lv_obj_t *parentPanel = nullptr;
     lv_obj_t *spacer = nullptr;

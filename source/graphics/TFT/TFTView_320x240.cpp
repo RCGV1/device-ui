@@ -221,6 +221,7 @@ TFTView_320x240::TFTView_320x240(const DisplayDriverConfig *cfg, DisplayDriver *
     filter.active = false;
     highlight.active = false;
     objects.main_screen = nullptr;
+    selectNode(0);
 }
 
 #ifdef UNIT_TEST
@@ -246,6 +247,7 @@ void TFTView_320x240::showNodesScreenForTesting(void)
 
 void TFTView_320x240::resetNodeListForTesting(void)
 {
+    removeSpinner();
     while (!nodeObjects.empty()) {
         removeFromMap(nodeObjects.begin()->first);
     }
@@ -263,6 +265,7 @@ void TFTView_320x240::resetNodeListForTesting(void)
         }
     }
     messages.clear();
+    activeMsgContainer = objects.messages_container;
 
     for (auto &entry : chats) {
         if (entry.second) {
@@ -271,6 +274,7 @@ void TFTView_320x240::resetNodeListForTesting(void)
     }
     chats.clear();
     updateActiveChats();
+    selectNode(0);
 
     nodeCount = 0;
     nodesOnline = 0;
@@ -489,6 +493,35 @@ uintptr_t TFTView_320x240::traceRouteNodeCallbackPayloadForTesting(NodeId id) co
     return (uintptr_t)traceRouteNodeCallbackUserData(id);
 }
 
+uint32_t TFTView_320x240::selectedNodeForTesting() const
+{
+    return currentNode;
+}
+
+bool TFTView_320x240::messagesPanelVisibleForTesting() const
+{
+    return activePanel == objects.messages_panel && !lv_obj_has_flag(objects.messages_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+bool TFTView_320x240::mapPanelVisibleForTesting() const
+{
+    return activePanel == objects.map_panel && !lv_obj_has_flag(objects.map_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+void TFTView_320x240::sendActiveTextForTesting(char *msg)
+{
+    handleAddMessage(msg);
+}
+
+void TFTView_320x240::focusVirtualNodeForTesting(NodeId id)
+{
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    if (virtualNodeList) {
+        virtualNodeList->focus(id);
+    }
+#endif
+}
+
 void TFTView_320x240::enableVirtualNodeListForTesting()
 {
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
@@ -500,6 +533,12 @@ void TFTView_320x240::enableVirtualNodeListForTesting()
 void TFTView_320x240::setOfflineFilterForTesting(bool enabled)
 {
     lv_obj_set_state(objects.nodes_filter_offline_switch, LV_STATE_CHECKED, enabled);
+    updateNodesFiltered(true);
+}
+
+void TFTView_320x240::setPositionFilterForTesting(bool enabled)
+{
+    lv_obj_set_state(objects.nodes_filter_position_switch, LV_STATE_CHECKED, enabled);
     updateNodesFiltered(true);
 }
 
@@ -3256,7 +3295,11 @@ void TFTView_320x240::ui_event_mesh_detector_start(_lv_event_t *e)
 
 void TFTView_320x240::ui_event_signal_scanner(lv_event_t *e)
 {
-    if (currentPanel) {
+    if (currentPanel
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+        || (THIS->useVirtualNodeList && currentNode)
+#endif
+    ) {
         const NodeRecord *record = THIS->nodeRecord(currentNode);
         THIS->setNodeImage(currentNode, record ? (MeshtasticView::eRole)record->user.role : eRole::unknown,
                            record && record->unmessagable, objects.signal_scanner_node_image);
@@ -3359,7 +3402,11 @@ void TFTView_320x240::ui_event_trace_route(lv_event_t *e)
     lv_obj_clear_flag(objects.start_button_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(objects.hop_routes_panel, LV_OBJ_FLAG_HIDDEN);
 
-    if (currentPanel) {
+    if (currentPanel
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+        || (THIS->useVirtualNodeList && THIS->currentNode)
+#endif
+    ) {
         const NodeRecord *record = THIS->nodeRecord(THIS->currentNode);
         THIS->setNodeImage(THIS->currentNode, record ? (MeshtasticView::eRole)record->user.role : eRole::unknown,
                            record && record->unmessagable, objects.trace_route_to_image);
@@ -3385,7 +3432,11 @@ void TFTView_320x240::ui_event_trace_route_to(lv_event_t *e)
 void TFTView_320x240::ui_event_trace_route_start(lv_event_t *e)
 {
     if (!spinnerButton) {
-        if (currentPanel) {
+        if (currentPanel
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+            || (THIS->useVirtualNodeList && currentNode)
+#endif
+        ) {
             time(&startTime);
             lv_obj_t *obj = lv_spinner_create(objects.start_button_panel);
             spinnerButton = obj;
@@ -7372,7 +7423,11 @@ void TFTView_320x240::showMessages(uint32_t nodeNum)
     activeMsgContainer->user_data = (void *)nodeNum;
     lv_obj_clear_flag(activeMsgContainer, LV_OBJ_FLAG_HIDDEN);
     lv_obj_t *p = nodePanel(nodeNum);
-    if (p) {
+    if (p
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+        || useVirtualNodeList
+#endif
+    ) {
         lv_label_set_text(objects.top_messages_node_label, nodeDisplayName(nodeNum) ? nodeDisplayName(nodeNum) : "");
         ui_set_active(objects.messages_button, objects.messages_panel, objects.top_messages_panel);
         if (nodeHasKey(nodeNum)) {
@@ -7616,6 +7671,9 @@ void TFTView_320x240::syncVisibleNodeIndex(void)
 void TFTView_320x240::syncNodeListPresentation(void)
 {
     syncVisibleNodeIndex();
+    if (currentNode && (!nodeStore.find(currentNode) || !visibleNodes.contains(currentNode))) {
+        selectNode(0);
+    }
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
     if (!useVirtualNodeList) {
         return;
@@ -7667,6 +7725,62 @@ void TFTView_320x240::ensureVirtualNodeList(void)
     }
     lv_obj_move_foreground(virtualNodeListHost);
     virtualNodeList.reset(new VirtualNodeList(virtualNodeListHost, *this));
+}
+
+void TFTView_320x240::nodeClicked(NodeId id)
+{
+    if (!id || !nodeStore.find(id)) {
+        return;
+    }
+
+    if (currentNode == id) {
+        selectNode(0);
+    } else {
+        selectNode(id);
+    }
+
+    if (chooseNodeSignalScanner) {
+        chooseNodeSignalScanner = false;
+        ui_event_signal_scanner(nullptr);
+        lv_dropdown_set_selected(objects.nodes_filter_hops_dropdown, selectedHops);
+        updateNodesFiltered(true);
+        updateNodesStatus();
+    } else if (chooseNodeTraceRoute) {
+        chooseNodeTraceRoute = false;
+        ui_event_trace_route(nullptr);
+    } else {
+        syncNodeListPresentation();
+    }
+}
+
+void TFTView_320x240::nodeLongPressed(NodeId id)
+{
+    if (nodeIsMessagable(id)) {
+        showMessages(id);
+    }
+}
+
+void TFTView_320x240::nodeFocused(NodeId id)
+{
+    if (!id || !nodeStore.find(id)) {
+        return;
+    }
+    selectNode(id);
+    if (virtualNodeList) {
+        virtualNodeList->scrollTo(id, LV_ANIM_OFF);
+    }
+}
+
+void TFTView_320x240::nodePositionClicked(NodeId id)
+{
+    const NodePosition position = nodePosition(id);
+    if (position.known && position.latitude && position.longitude) {
+        ui_set_active(objects.map_button, objects.map_panel, objects.top_map_panel);
+        if (!map) {
+            loadMap();
+        }
+        map->setScrolledPosition(position.latitude * 1e-7, position.longitude * 1e-7);
+    }
 }
 #endif
 // -------- helpers --------

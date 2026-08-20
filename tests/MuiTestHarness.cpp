@@ -190,6 +190,11 @@ void MuiTestHarness::setOfflineFilterFixture(bool enabled)
     view->setOfflineFilterForTesting(enabled);
 }
 
+void MuiTestHarness::setPositionFilterFixture(bool enabled)
+{
+    view->setPositionFilterForTesting(enabled);
+}
+
 void MuiTestHarness::addUntilPurgeFixture(size_t count)
 {
     for (size_t i = 0; i < count; ++i) {
@@ -450,6 +455,89 @@ MuiControllerCall MuiTestHarness::lastTextMessage() const
 MuiControllerCall MuiTestHarness::lastTraceRoute() const
 {
     return recordingController->lastTrace;
+}
+
+uint32_t MuiTestHarness::selectedNode() const
+{
+    return view->selectedNodeForTesting();
+}
+
+bool MuiTestHarness::messagesPanelVisible() const
+{
+    return view->messagesPanelVisibleForTesting();
+}
+
+bool MuiTestHarness::mapPanelVisible() const
+{
+    return view->mapPanelVisibleForTesting();
+}
+
+namespace
+{
+lv_obj_t *virtualRowButton(lv_obj_t *root, uint32_t nodeId)
+{
+    if (!root) {
+        return nullptr;
+    }
+
+    const uint32_t childCount = lv_obj_get_child_count(root);
+    for (uint32_t index = 0; index < childCount; ++index) {
+        lv_obj_t *row = lv_obj_get_child(root, static_cast<int32_t>(index));
+        if (!row || lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN) || lv_obj_get_child_count(row) < 2 ||
+            static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(row))) != nodeId) {
+            continue;
+        }
+        return lv_obj_get_child(row, 1);
+    }
+    return nullptr;
+}
+
+lv_obj_t *virtualRowPositionLabel(lv_obj_t *root, uint32_t nodeId)
+{
+    if (!root) {
+        return nullptr;
+    }
+
+    const uint32_t childCount = lv_obj_get_child_count(root);
+    for (uint32_t index = 0; index < childCount; ++index) {
+        lv_obj_t *row = lv_obj_get_child(root, static_cast<int32_t>(index));
+        if (!row || lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN) || lv_obj_get_child_count(row) < 8 ||
+            static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(row))) != nodeId) {
+            continue;
+        }
+        return lv_obj_get_child(row, 7);
+    }
+    return nullptr;
+}
+} // namespace
+
+void MuiTestHarness::dispatchVirtualNodeEvent(uint32_t nodeId, lv_event_code_t eventCode)
+{
+    if (eventCode == LV_EVENT_FOCUSED) {
+        view->focusVirtualNodeForTesting(nodeId);
+        pump();
+    }
+    lv_obj_t *button = virtualRowButton(nodeListRootForTesting(), nodeId);
+    if (button) {
+        lv_obj_send_event(button, eventCode, nullptr);
+        pump();
+    }
+}
+
+void MuiTestHarness::dispatchVirtualNodePositionEvent(uint32_t nodeId)
+{
+    lv_obj_t *label = virtualRowPositionLabel(nodeListRootForTesting(), nodeId);
+    if (label) {
+        lv_obj_send_event(label, LV_EVENT_CLICKED, nullptr);
+        pump();
+    }
+}
+
+void MuiTestHarness::sendActiveText(const char *msg)
+{
+    char buf[240]{};
+    std::strncpy(buf, msg, sizeof(buf) - 1);
+    view->sendActiveTextForTesting(buf);
 }
 
 const NodeStore &MuiTestHarness::store() const

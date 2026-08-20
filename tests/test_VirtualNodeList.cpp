@@ -12,10 +12,12 @@ class DummyActionSink : public NodeListActionSink
     void nodeClicked(NodeId id) override { lastClicked = id; }
     void nodeLongPressed(NodeId id) override { lastLongPressed = id; }
     void nodeFocused(NodeId id) override { lastFocused = id; }
+    void nodePositionClicked(NodeId id) override { lastPositionClicked = id; }
 
     NodeId lastClicked = 0;
     NodeId lastLongPressed = 0;
     NodeId lastFocused = 0;
+    NodeId lastPositionClicked = 0;
 };
 
 namespace

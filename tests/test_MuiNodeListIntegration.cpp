@@ -372,5 +372,156 @@ TEST_CASE("gated virtual node list renders mutation resyncs")
         CHECK(renderedVirtualNodeAt(harness, 0) == 0xb00000faU);
     }
 }
+
+TEST_CASE("gated virtual node list click expands and collapses by NodeId")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.enableVirtualNodeListFixture();
+    harness.setCurrentTime(1700000000U);
+
+    harness.addNodeFixture(0x11111111, "ONE", "One Node", 1699999900U, MeshtasticView::router, true, false, 1);
+    harness.updatePositionFixture(0x11111111, 377749000, -1224194000, 42, 8, 13);
+    harness.showNodesScreen();
+
+    CHECK(harness.selectedNode() == 0U);
+
+    harness.dispatchVirtualNodeEvent(0x11111111, LV_EVENT_CLICKED);
+    CHECK(harness.selectedNode() == 0x11111111);
+    CHECK(virtualRowSnapshot(harness, 0x11111111).position1 == "37.77490 -122.41940");
+
+    harness.dispatchVirtualNodeEvent(0x11111111, LV_EVENT_CLICKED);
+    CHECK(harness.selectedNode() == 0U);
+    CHECK(virtualRowSnapshot(harness, 0x11111111).position1.empty());
+}
+
+TEST_CASE("gated virtual node list long press opens only legacy-permitted direct chats")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.enableVirtualNodeListFixture();
+    harness.setCurrentTime(1700000000U);
+    harness.setLoRaHopLimit(7);
+
+    harness.addNodeFixture(0x11111111, "ONE", "One Node", 1699999900U, MeshtasticView::router, true, false, 1);
+    harness.addNodeFixture(0x22222222, "TWO", "Two Node", 1699999890U, MeshtasticView::client, false, true, 2);
+    harness.updateHopsFixture(0x11111111, 2);
+    harness.showNodesScreen();
+
+    harness.dispatchVirtualNodeEvent(0x22222222, LV_EVENT_LONG_PRESSED);
+    CHECK_FALSE(harness.messagesPanelVisible());
+    CHECK(harness.lastTextMessage().to == 0U);
+
+    harness.dispatchVirtualNodeEvent(0x11111111, LV_EVENT_LONG_PRESSED);
+    REQUIRE(harness.messagesPanelVisible());
+    harness.sendActiveText("hello");
+
+    const MuiControllerCall text = harness.lastTextMessage();
+    CHECK(text.to == 0x11111111);
+    CHECK(text.channel == 1);
+    CHECK(text.hopLimit == 3);
+    CHECK(text.usePkc);
+    CHECK(text.text == "hello");
+}
+
+TEST_CASE("gated virtual node list scan and traceroute route by selected NodeId")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.enableVirtualNodeListFixture();
+    harness.setCurrentTime(1700000000U);
+    harness.setLoRaHopLimit(7);
+
+    harness.addNodeFixture(0x11111111, "ONE", "One Node", 1699999900U, MeshtasticView::router, true, false, 1);
+    harness.updateHopsFixture(0x11111111, 2);
+    harness.showNodesScreen();
+    harness.dispatchVirtualNodeEvent(0x11111111, LV_EVENT_CLICKED);
+
+    harness.scanSignal();
+    MuiControllerCall position = harness.lastPositionRequest();
+    CHECK(position.to == 0x11111111);
+    CHECK(position.channel == 1);
+
+    harness.startTraceRoute();
+    MuiControllerCall trace = harness.lastTraceRoute();
+    CHECK(trace.to == 0x11111111);
+    CHECK(trace.channel == 1);
+    CHECK(trace.hopLimit == 3);
+}
+
+TEST_CASE("gated virtual node list routes expanded position clicks to map by NodeId")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.enableVirtualNodeListFixture();
+    harness.setCurrentTime(1700000000U);
+
+    harness.addNodeFixture(0x11111111, "ONE", "One Node", 1699999900U, MeshtasticView::router, true, false, 1);
+    harness.updatePositionFixture(0x11111111, 377749000, -1224194000, 42, 8, 13);
+    harness.showNodesScreen();
+    harness.dispatchVirtualNodeEvent(0x11111111, LV_EVENT_CLICKED);
+    REQUIRE(virtualRowSnapshot(harness, 0x11111111).position1 == "37.77490 -122.41940");
+
+    harness.dispatchVirtualNodePositionEvent(0x11111111);
+    CHECK(harness.mapPanelVisible());
+}
+
+TEST_CASE("gated virtual node list keeps selection stable across recycling, filters, and purge")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.enableVirtualNodeListFixture();
+    harness.setCurrentTime(1700000000U);
+
+    for (uint32_t i = 1; i <= 30; ++i) {
+        char shortName[8]{};
+        std::snprintf(shortName, sizeof(shortName), "N%02u", i);
+        harness.addNodeFixture(i, shortName, "Selectable Node", 1000U + i);
+    }
+    harness.showNodesScreen();
+
+    harness.dispatchVirtualNodeEvent(25, LV_EVENT_FOCUSED);
+    CHECK(harness.selectedNode() == 25U);
+
+    harness.setCurrentTime(2000U);
+    harness.updateLastHeardFixture(1);
+    CHECK(harness.selectedNode() == 25U);
+    CHECK(harness.node(25) != nullptr);
+
+    harness.setPositionFilterFixture(true);
+    CHECK(harness.selectedNode() == 0U);
+
+    harness.resetNodeList();
+    harness.enableVirtualNodeListFixture();
+    harness.addNodeFixture(1, "N01", "Stale Selected Node", 1U);
+    harness.showNodesScreen();
+    harness.dispatchVirtualNodeEvent(1, LV_EVENT_CLICKED);
+    CHECK(harness.selectedNode() == 1U);
+    harness.addUntilPurgeFixture(250);
+    CHECK(harness.node(1) == nullptr);
+    CHECK(harness.selectedNode() == 0U);
+}
+
+TEST_CASE("active direct chats protect purge candidates in legacy and virtual node lists")
+{
+    for (bool virtualMode : {false, true}) {
+        CAPTURE(virtualMode);
+        MuiTestHarness harness;
+        harness.resetNodeList();
+        if (virtualMode) {
+            harness.enableVirtualNodeListFixture();
+        }
+        harness.setCurrentTime(1000U);
+
+        harness.addNodeFixture(0x10101010, "KEEP", "Active Chat Node", 1U);
+        harness.addNodeFixture(0x20202020, "DROP", "Purge Candidate", 2U);
+        harness.addActiveChatFixture(0x10101010);
+        harness.addUntilPurgeFixture(249);
+
+        CHECK(harness.node(0x10101010) != nullptr);
+        CHECK(harness.node(0x20202020) == nullptr);
+        CHECK(harness.store().size() == 250);
+    }
+}
 #endif
 #endif

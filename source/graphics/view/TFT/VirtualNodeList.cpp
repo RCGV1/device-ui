@@ -288,6 +288,8 @@ void VirtualNodeList::createRowPool()
         lv_obj_remove_flag(row.lblPos1, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_style_align(row.lblPos1, LV_ALIGN_TOP_LEFT, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_text_color(row.lblPos1, lv_color_hex(0x05f6cb), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_add_flag(row.lblPos1, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(row.lblPos1, rowPositionCallback, LV_EVENT_CLICKED, this);
         lv_obj_add_flag(row.lblPos1, LV_OBJ_FLAG_HIDDEN);
 
         row.lblPos2 = lv_label_create(row.panel);
@@ -410,6 +412,7 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     row.boundId = record.id;
     lv_obj_set_user_data(row.panel, reinterpret_cast<void *>(static_cast<uintptr_t>(record.id)));
     lv_obj_set_user_data(row.btn, reinterpret_cast<void *>(static_cast<uintptr_t>(record.id)));
+    lv_obj_set_user_data(row.lblPos1, reinterpret_cast<void *>(static_cast<uintptr_t>(record.id)));
 
     setRoleImage(record, row.img);
     if (!record.hasKey) {
@@ -579,5 +582,19 @@ void VirtualNodeList::rowClickCallback(lv_event_t *e)
         self->actionSink.nodeLongPressed(id);
     } else if (code == LV_EVENT_FOCUSED) {
         self->actionSink.nodeFocused(id);
+    }
+}
+
+void VirtualNodeList::rowPositionCallback(lv_event_t *e)
+{
+    auto *self = static_cast<VirtualNodeList *>(lv_event_get_user_data(e));
+    auto *label = static_cast<lv_obj_t *>(lv_event_get_target(e));
+    if (!self || !label) {
+        return;
+    }
+
+    const auto id = static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(label)));
+    if (id != 0 && lv_event_get_code(e) == LV_EVENT_CLICKED) {
+        self->actionSink.nodePositionClicked(id);
     }
 }
