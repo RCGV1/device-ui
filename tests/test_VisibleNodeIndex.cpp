@@ -1,4 +1,5 @@
 #include "doctest.h"
+#include "graphics/common/MeshtasticView.h"
 #include "graphics/common/VisibleNodeIndex.h"
 
 #include <algorithm>
@@ -61,7 +62,7 @@ TEST_CASE("visible index applies current filters and newest-first ordering")
 
     SUBCASE("no filter: sorted newest first, then NodeId ascending")
     {
-        index.rebuild(store, filter, ownNode);
+        index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
         // Order expected:
         // 0x1111 (1000) & 0x9999 (1000) -> 0x1111, 0x9999
         // 0x4444 (800)
@@ -79,50 +80,50 @@ TEST_CASE("visible index applies current filters and newest-first ordering")
     SUBCASE("filter unknown: excludes 0x2222 (unknown)")
     {
         filter.unknown = true;
-        index.rebuild(store, filter, ownNode);
+        index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
         CHECK(index.ids() == std::vector<NodeId>{0x1111, 0x9999, 0x4444, 0x3333});
     }
 
     SUBCASE("filter offline: excludes 0x2222 (500 < 700) and 0x3333 (0)")
     {
         filter.offline = true;
-        index.rebuild(store, filter, ownNode);
+        index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
         CHECK(index.ids() == std::vector<NodeId>{0x1111, 0x9999, 0x4444});
     }
 
     SUBCASE("filter public key: excludes 0x2222 (hasKey=false)")
     {
         filter.publicKey = true;
-        index.rebuild(store, filter, ownNode);
+        index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
         CHECK(index.ids() == std::vector<NodeId>{0x1111, 0x9999, 0x4444, 0x3333});
     }
 
     SUBCASE("filter channel: channel 1 (dropdown selected=2 -> channel=1) selects only 0x2222 plus ownNode")
     {
         filter.channel = 2; // channel index 1
-        index.rebuild(store, filter, ownNode);
+        index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
         CHECK(index.ids() == std::vector<NodeId>{0x9999, 0x2222});
     }
 
     SUBCASE("filter position: requires known coordinates, selects 0x1111 plus ownNode")
     {
         filter.position = true;
-        index.rebuild(store, filter, ownNode);
+        index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
         CHECK(index.ids() == std::vector<NodeId>{0x1111, 0x9999});
     }
 
-    SUBCASE("filter mqtt: selects only nodes via mqtt plus ownNode")
+    SUBCASE("filter mqtt: remains disabled for legacy-compatible parity")
     {
         store.upsertUser(0x5555, 0, 950, makeUser("!00005555", "MQTT Node", "MQTT"), true);
         filter.viaMqtt = true;
-        index.rebuild(store, filter, ownNode);
-        CHECK(index.ids() == std::vector<NodeId>{0x9999, 0x5555});
+        index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
+        CHECK(index.ids() == std::vector<NodeId>{0x1111, 0x9999, 0x5555, 0x4444, 0x2222, 0x3333});
     }
 
     SUBCASE("filter hops: hops <= 0 (dropdown 7) selects direct nodes (0x1111)")
     {
         filter.hops = 7; // 7 - 7 = 0 -> hopsAway <= 0
-        index.rebuild(store, filter, ownNode);
+        index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
         CHECK(index.contains(0x1111));
         CHECK_FALSE(index.contains(0x2222)); // hops 2
         CHECK_FALSE(index.contains(0x3333)); // hops 1
@@ -131,7 +132,7 @@ TEST_CASE("visible index applies current filters and newest-first ordering")
     SUBCASE("filter hops: hops >= 2 (dropdown 9) selects 0x2222")
     {
         filter.hops = 9; // 9 - 7 = 2 -> hopsAway >= 2
-        index.rebuild(store, filter, ownNode);
+        index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
         CHECK(index.contains(0x2222));
         CHECK_FALSE(index.contains(0x1111)); // hops 0
         CHECK_FALSE(index.contains(0x3333)); // hops 1
@@ -140,22 +141,39 @@ TEST_CASE("visible index applies current filters and newest-first ordering")
     SUBCASE("filter name: case-insensitive search matching 'alp'")
     {
         filter.name = "alp";
-        index.rebuild(store, filter, ownNode);
+        index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
         CHECK(index.ids() == std::vector<NodeId>{0x1111, 0x9999}); // 0x1111 matches, ownNode always kept
     }
 
     SUBCASE("filter name: search matching hex node ID of unknown node '2222'")
     {
         filter.name = "2222";
-        index.rebuild(store, filter, ownNode);
+        index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
         CHECK(index.contains(0x2222));
         CHECK_FALSE(index.contains(0x1111));
+    }
+
+    SUBCASE("filter name: displayed unknown short ID matches but decimal and full hex IDs do not")
+    {
+        store.upsertUnknown(0x1234abcd, 0, 900, MeshtasticView::unknown, false, false);
+
+        filter.name = "abcd";
+        index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
+        CHECK(index.contains(0x1234abcd));
+
+        filter.name = "1234abcd";
+        index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
+        CHECK_FALSE(index.contains(0x1234abcd));
+
+        filter.name = "305441741";
+        index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
+        CHECK_FALSE(index.contains(0x1234abcd));
     }
 
     SUBCASE("filter name negation: '!' excludes matches")
     {
         filter.name = "!alpha";
-        index.rebuild(store, filter, ownNode);
+        index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
         // Excludes 0x1111, keeps others
         CHECK(std::find(index.ids().begin(), index.ids().end(), 0x1111) == index.ids().end());
         CHECK(index.contains(0x4444));
@@ -172,14 +190,14 @@ TEST_CASE("visible index preserves stable selection lookup after last-heard reor
 
     VisibleNodeIndex index;
     NodeListFilter filter;
-    index.rebuild(store, filter, 0);
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
 
     REQUIRE(index.ids().size() == 3);
     CHECK(index.indexOf(0x2222) == std::optional<size_t>(1));
 
     // Update Bravo to be newest
     store.updateLastHeard(0x2222, 900);
-    index.rebuild(store, filter, 0);
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
 
     CHECK(index.indexOf(0x2222) == std::optional<size_t>(0));
     CHECK(index.indexOf(0x1111) == std::optional<size_t>(1));

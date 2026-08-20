@@ -36,6 +36,9 @@ struct ReusableRow {
     char lastHeardText[32]{};
     char signalText[32]{};
     char positionText[48]{};
+    char position2Text[32]{};
+    char telemetry1Text[64]{};
+    char telemetry2Text[48]{};
     NodeId boundId = 0;
 };
 

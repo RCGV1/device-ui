@@ -102,7 +102,7 @@ std::unique_ptr<VirtualNodeList> populateVirtual(MuiTestHarness &harness, const 
     for (const auto &fixture : fixtures) {
         store.upsertUser(fixture.id, fixture.channel, fixture.lastHeard, makeUser(fixture), false);
     }
-    visibleIndex.rebuild(store, filter, 0);
+    visibleIndex.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
     list->sync(store, visibleIndex, 0, captureTime);
     return list;
 }

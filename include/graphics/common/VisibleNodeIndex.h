@@ -20,10 +20,12 @@ struct NodeListFilter {
     uint32_t secsUntilOffline = 900; // default 15 minutes
 };
 
+enum class NodeListFilterPolicy { LegacyCompatible };
+
 class VisibleNodeIndex
 {
   public:
-    void rebuild(const NodeStore &store, const NodeListFilter &filter, NodeId ownNode);
+    void rebuild(const NodeStore &store, const NodeListFilter &filter, NodeId ownNode, NodeListFilterPolicy policy);
 
     const std::vector<NodeId> &ids() const { return visibleIds; }
     size_t size() const { return visibleIds.size(); }
@@ -32,7 +34,7 @@ class VisibleNodeIndex
     std::optional<size_t> indexOf(NodeId id) const;
     bool contains(NodeId id) const;
 
-    static bool isVisible(const NodeRecord &node, const NodeListFilter &filter, NodeId ownNode);
+    static bool isVisible(const NodeRecord &node, const NodeListFilter &filter, NodeId ownNode, NodeListFilterPolicy policy);
 
   private:
     std::vector<NodeId> visibleIds;

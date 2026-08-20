@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 
@@ -36,6 +37,54 @@ void formatLastHeard(uint32_t lastHeard, uint32_t currentTime, char *buffer, siz
     } else {
         buffer[0] = '\0';
     }
+}
+
+void setHidden(lv_obj_t *obj, bool hidden)
+{
+    if (hidden) {
+        lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_remove_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void setRoleImage(const NodeRecord &record, lv_obj_t *img)
+{
+    if (record.unmessagable) {
+        lv_image_set_src(img, &img_unmessagable_image);
+        lv_obj_set_style_image_recolor(img, lv_color_hex(0xff5555), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_image_recolor_opa(img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_color(img, lv_color_hex(0x202020), LV_PART_MAIN | LV_STATE_DEFAULT);
+        return;
+    }
+
+    switch (record.user.role) {
+    case meshtastic_Config_DeviceConfig_Role_ROUTER:
+    case meshtastic_Config_DeviceConfig_Role_REPEATER:
+    case meshtastic_Config_DeviceConfig_Role_ROUTER_LATE:
+        lv_image_set_src(img, &img_node_router_image);
+        break;
+    case meshtastic_Config_DeviceConfig_Role_ROUTER_CLIENT:
+        lv_image_set_src(img, &img_top_nodes_image);
+        break;
+    case meshtastic_Config_DeviceConfig_Role_TRACKER:
+    case meshtastic_Config_DeviceConfig_Role_SENSOR:
+    case meshtastic_Config_DeviceConfig_Role_LOST_AND_FOUND:
+    case meshtastic_Config_DeviceConfig_Role_TAK_TRACKER:
+        lv_image_set_src(img, &img_node_sensor_image);
+        break;
+    case meshtastic_Config_DeviceConfig_Role_CLIENT:
+    case meshtastic_Config_DeviceConfig_Role_CLIENT_MUTE:
+    case meshtastic_Config_DeviceConfig_Role_CLIENT_HIDDEN:
+    case meshtastic_Config_DeviceConfig_Role_TAK:
+        lv_image_set_src(img, &img_node_client_image);
+        break;
+    default:
+        lv_image_set_src(img, record.hasUser ? &img_node_client_image : &img_circle_question_image);
+        break;
+    }
+    lv_obj_set_style_image_recolor(img, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_image_recolor_opa(img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
 }
 } // namespace
 
@@ -180,13 +229,19 @@ void VirtualNodeList::createRowPool()
         lv_obj_add_flag(row.lblPos2, LV_OBJ_FLAG_HIDDEN);
 
         row.lblTm1 = lv_label_create(row.panel);
-        lv_obj_set_pos(row.lblTm1, 0, 84);
-        lv_obj_set_size(row.lblTm1, lv_pct(100), LV_SIZE_CONTENT);
+        lv_obj_set_pos(row.lblTm1, 8, 49);
+        lv_obj_set_size(row.lblTm1, 130, LV_SIZE_CONTENT);
+        lv_label_set_long_mode(row.lblTm1, LV_LABEL_LONG_CLIP);
+        lv_obj_set_style_align(row.lblTm1, LV_ALIGN_TOP_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_align(row.lblTm1, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_add_flag(row.lblTm1, LV_OBJ_FLAG_HIDDEN);
 
         row.lblTm2 = lv_label_create(row.panel);
-        lv_obj_set_pos(row.lblTm2, 0, 100);
-        lv_obj_set_size(row.lblTm2, lv_pct(100), LV_SIZE_CONTENT);
+        lv_obj_set_pos(row.lblTm2, 8, 63);
+        lv_obj_set_size(row.lblTm2, 130, LV_SIZE_CONTENT);
+        lv_label_set_long_mode(row.lblTm2, LV_LABEL_LONG_CLIP);
+        lv_obj_set_style_align(row.lblTm2, LV_ALIGN_TOP_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_align(row.lblTm2, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_add_flag(row.lblTm2, LV_OBJ_FLAG_HIDDEN);
 
         lv_label_set_text_static(row.lblShort, row.shortText);
@@ -195,6 +250,9 @@ void VirtualNodeList::createRowPool()
         lv_label_set_text_static(row.lblLh, row.lastHeardText);
         lv_label_set_text_static(row.lblSig, row.signalText);
         lv_label_set_text_static(row.lblPos1, row.positionText);
+        lv_label_set_text_static(row.lblPos2, row.position2Text);
+        lv_label_set_text_static(row.lblTm1, row.telemetry1Text);
+        lv_label_set_text_static(row.lblTm2, row.telemetry2Text);
 
         lv_obj_add_flag(row.panel, LV_OBJ_FLAG_HIDDEN);
     }
@@ -280,6 +338,13 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     lv_obj_set_user_data(row.panel, reinterpret_cast<void *>(static_cast<uintptr_t>(record.id)));
     lv_obj_set_user_data(row.btn, reinterpret_cast<void *>(static_cast<uintptr_t>(record.id)));
 
+    setRoleImage(record, row.img);
+    if (!record.hasKey) {
+        lv_obj_set_style_border_color(row.img, lv_color_hex(0xff5555), LV_PART_MAIN | LV_STATE_DEFAULT);
+    } else {
+        lv_obj_set_style_border_color(row.img, lv_obj_get_style_bg_color(row.img, LV_PART_MAIN), LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
+
     setRowText(row.lblShort, row.shortText, record.user.short_name);
     setRowText(row.lblLong, row.longText, record.user.long_name);
 
@@ -304,18 +369,56 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     lv_label_set_text_static(row.lblSig, row.signalText);
 
     const int32_t height = isExpanded ? EXPANDED_ROW_HEIGHT : COLLAPSED_ROW_HEIGHT;
-    lv_obj_set_height(row.panel, height);
+    lv_obj_set_size(row.panel, lv_pct(100), height);
+    lv_obj_update_layout(row.panel);
 
-    if (isExpanded && record.position.known) {
+    row.positionText[0] = '\0';
+    row.position2Text[0] = '\0';
+    row.telemetry1Text[0] = '\0';
+    row.telemetry2Text[0] = '\0';
+
+    const bool showPosition =
+        isExpanded && record.position.known && (record.position.latitude != 0 || record.position.longitude != 0);
+    if (showPosition) {
+        const int32_t altitude = std::abs(record.position.altitude) < 10000 ? record.position.altitude : 0;
         std::snprintf(row.positionText, sizeof(row.positionText), "%.5f %.5f", record.position.latitude * 1e-7,
                       record.position.longitude * 1e-7);
-        lv_label_set_text_static(row.lblPos1, row.positionText);
-        lv_obj_remove_flag(row.lblPos1, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(row.lblPos1, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(row.lblPos2, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(row.lblTm1, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(row.lblTm2, LV_OBJ_FLAG_HIDDEN);
+        std::snprintf(row.position2Text, sizeof(row.position2Text), "%dm MSL", static_cast<int>(altitude));
+    }
+    lv_label_set_text_static(row.lblPos1, row.positionText);
+    lv_label_set_text_static(row.lblPos2, row.position2Text);
+    setHidden(row.lblPos1, !showPosition);
+    setHidden(row.lblPos2, !showPosition);
+
+    const bool showTelemetry1 = isExpanded && record.hasEnvironmentMetrics;
+    if (showTelemetry1) {
+        const auto &metrics = record.environmentMetrics;
+        if (static_cast<int>(metrics.relative_humidity) > 0) {
+            std::snprintf(row.telemetry1Text, sizeof(row.telemetry1Text), "%2.1f°C %d%% %3.1fhPa", metrics.temperature,
+                          static_cast<int>(metrics.relative_humidity), metrics.barometric_pressure);
+        } else {
+            std::snprintf(row.telemetry1Text, sizeof(row.telemetry1Text), "%2.1f°C %3.1fhPa", metrics.temperature,
+                          metrics.barometric_pressure);
+        }
+    }
+    lv_label_set_text_static(row.lblTm1, row.telemetry1Text);
+    setHidden(row.lblTm1, !showTelemetry1);
+
+    const bool showTelemetry2 =
+        isExpanded && record.hasEnvironmentMetrics && record.environmentMetrics.iaq > 0 && record.environmentMetrics.iaq < 1000;
+    if (showTelemetry2) {
+        const auto &metrics = record.environmentMetrics;
+        std::snprintf(row.telemetry2Text, sizeof(row.telemetry2Text), "IAQ: %d %.1fV %.1fmA", static_cast<int>(metrics.iaq),
+                      metrics.voltage, metrics.current);
+    }
+    lv_label_set_text_static(row.lblTm2, row.telemetry2Text);
+    setHidden(row.lblTm2, !showTelemetry2);
+
+    if (!isExpanded) {
+        setHidden(row.lblPos1, true);
+        setHidden(row.lblPos2, true);
+        setHidden(row.lblTm1, true);
+        setHidden(row.lblTm2, true);
     }
 }
 

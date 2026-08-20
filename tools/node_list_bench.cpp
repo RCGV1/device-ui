@@ -474,7 +474,7 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
         NodeListFilter filter;
 
         auto sync = [&] {
-            index.rebuild(store, filter, 0);
+            index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
             list->sync(store, index, 0, 1700000000U);
             harness.pump();
             objectCountStableOk = objectCountStableOk && harness.objectCount() == pooledObjectCount &&

@@ -20,8 +20,11 @@ bool containsCaseInsensitive(const char *haystack, const std::string &needle)
 
 } // namespace
 
-bool VisibleNodeIndex::isVisible(const NodeRecord &node, const NodeListFilter &filter, NodeId ownNode)
+bool VisibleNodeIndex::isVisible(const NodeRecord &node, const NodeListFilter &filter, NodeId ownNode,
+                                 NodeListFilterPolicy policy)
 {
+    (void)policy;
+
     // Own node is never hidden by filters in MUI
     if (node.id == ownNode && ownNode != 0) {
         return true;
@@ -78,12 +81,8 @@ bool VisibleNodeIndex::isVisible(const NodeRecord &node, const NodeListFilter &f
         }
     }
 
-    // Filter MQTT
-    if (filter.viaMqtt) {
-        if (!node.viaMqtt) {
-            return false;
-        }
-    }
+    // Legacy MUI leaves the MQTT filter disabled.
+    (void)filter.viaMqtt;
 
     // Filter Position: require known coordinates
     if (filter.position) {
@@ -94,15 +93,8 @@ bool VisibleNodeIndex::isVisible(const NodeRecord &node, const NodeListFilter &f
 
     // Filter Name
     if (!filter.name.empty()) {
-        char hexIdBuf[16];
-        std::snprintf(hexIdBuf, sizeof(hexIdBuf), "%04x", static_cast<unsigned int>(node.id & 0xffff));
-        char fullHexBuf[16];
-        std::snprintf(fullHexBuf, sizeof(fullHexBuf), "%08x", static_cast<unsigned int>(node.id));
-
         auto matchesAny = [&](const std::string &query) {
-            return containsCaseInsensitive(node.user.long_name, query) || containsCaseInsensitive(node.user.short_name, query) ||
-                   containsCaseInsensitive(node.user.id, query) || containsCaseInsensitive(hexIdBuf, query) ||
-                   containsCaseInsensitive(fullHexBuf, query);
+            return containsCaseInsensitive(node.user.long_name, query) || containsCaseInsensitive(node.user.short_name, query);
         };
 
         if (filter.name[0] != '!') {
@@ -120,14 +112,14 @@ bool VisibleNodeIndex::isVisible(const NodeRecord &node, const NodeListFilter &f
     return true;
 }
 
-void VisibleNodeIndex::rebuild(const NodeStore &store, const NodeListFilter &filter, NodeId ownNode)
+void VisibleNodeIndex::rebuild(const NodeStore &store, const NodeListFilter &filter, NodeId ownNode, NodeListFilterPolicy policy)
 {
     visibleIds.clear();
     visibleIds.reserve(store.size());
 
     for (const auto &pair : store.records()) {
         const auto &record = pair.second;
-        if (isVisible(record, filter, ownNode)) {
+        if (isVisible(record, filter, ownNode, policy)) {
             visibleIds.push_back(record.id);
         }
     }
