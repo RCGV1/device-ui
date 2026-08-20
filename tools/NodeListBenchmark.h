@@ -41,6 +41,20 @@ struct NodeListAllocatorDelta {
 };
 
 struct NodeListCandidateAllocatorTelemetry {
+    struct Operation {
+        std::string name;
+        NodeListAllocatorSnapshot before;
+        NodeListAllocatorSnapshot after;
+        NodeListAllocatorDelta delta;
+        NodeListAllocatorSnapshot peak;
+        size_t objectsBefore = 0;
+        size_t objectsAfter = 0;
+        size_t nodeListObjectsBefore = 0;
+        size_t nodeListObjectsAfter = 0;
+        bool objectCountStable = false;
+        bool allocatorUsedCountBounded = false;
+    };
+
     struct Trial {
         size_t iteration = 0;
         bool warmup = false;
@@ -49,6 +63,7 @@ struct NodeListCandidateAllocatorTelemetry {
         NodeListAllocatorSnapshot after;
         NodeListAllocatorDelta delta;
         NodeListAllocatorSnapshot peak;
+        std::vector<Operation> operations;
     };
 
     std::string meaning;

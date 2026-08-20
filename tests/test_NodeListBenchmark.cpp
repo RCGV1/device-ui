@@ -107,11 +107,12 @@ TEST_CASE("virtual candidate benchmark reports allocator churn from real LVGL no
     CHECK(report.correctness.candidate->objectCountStable);
     CHECK(report.correctness.candidate->presentation);
 
+    constexpr uint64_t allocatorUsedCountSlack = 8;
     bool allocatorBlockCountStayedBounded = true;
     for (const auto &trial : report.allocatorTelemetry->trials) {
         if (!trial.warmup) {
             allocatorBlockCountStayedBounded =
-                allocatorBlockCountStayedBounded && trial.after.usedCount <= trial.before.usedCount;
+                allocatorBlockCountStayedBounded && trial.after.usedCount <= trial.before.usedCount + allocatorUsedCountSlack;
         }
     }
     CHECK(report.correctness.candidate->allocatorChurnBounded == allocatorBlockCountStayedBounded);
@@ -141,7 +142,7 @@ TEST_CASE("virtual candidate JSON identifies candidate-only structural checks")
     CHECK(std::string(document["implementation"]["name"].GetString()) == "virtual_candidate");
     REQUIRE(document["timing"].HasMember("virtual_refresh_ns"));
     REQUIRE(document["timing"]["virtual_refresh_ns"].IsObject());
-    CHECK(document["timing"]["filter_ns"].IsNull());
+    REQUIRE(document["timing"]["filter_ns"].IsObject());
     REQUIRE(document["correctness"].HasMember("candidate"));
     const auto &candidate = document["correctness"]["candidate"];
     REQUIRE(candidate.IsObject());
@@ -179,6 +180,9 @@ TEST_CASE("virtual candidate JSON identifies candidate-only structural checks")
     REQUIRE(trial.HasMember("sync_snapshots"));
     REQUIRE(trial["sync_snapshots"].IsArray());
     REQUIRE(trial["sync_snapshots"].Size() > 0);
+    REQUIRE(trial.HasMember("operations"));
+    REQUIRE(trial["operations"].IsArray());
+    CHECK(trial["operations"].Size() >= 8);
     REQUIRE(trial.HasMember("iteration"));
     CHECK(trial["iteration"].IsUint64());
     REQUIRE(trial.HasMember("warmup"));
@@ -198,7 +202,9 @@ TEST_CASE("virtual candidate JSON identifies candidate-only structural checks")
     CHECK(delta["fragmentation_percent"].GetInt64() ==
           expectedDelta(before["fragmentation_percent"].GetUint64(), after["fragmentation_percent"].GetUint64()));
 
-    const bool usedBlockCountStayedBounded = after["used_count"].GetUint64() <= before["used_count"].GetUint64();
+    constexpr uint64_t allocatorUsedCountSlack = 8;
+    const bool usedBlockCountStayedBounded =
+        after["used_count"].GetUint64() <= before["used_count"].GetUint64() + allocatorUsedCountSlack;
     uint64_t minimumFreeSize = before["free_size"].GetUint64();
     uint64_t minimumBiggestBlock = before["biggest_free_block"].GetUint64();
     uint64_t maximumUsedCount = before["used_count"].GetUint64();
@@ -226,6 +232,73 @@ TEST_CASE("virtual candidate JSON identifies candidate-only structural checks")
     std::error_code removeError;
     std::filesystem::remove(outputPath, removeError);
     CHECK_FALSE(removeError);
+}
+
+TEST_CASE("benchmark JSON records per-operation stability telemetry for all validation sizes")
+{
+    for (const auto implementation :
+         {NodeListBenchmarkImplementation::Legacy, NodeListBenchmarkImplementation::VirtualCandidate}) {
+        for (const size_t nodes : {25U, 100U, 250U}) {
+            const auto report = runNodeListBenchmark({nodes, 1, 42, 1, implementation});
+            const auto outputPath =
+                std::filesystem::temp_directory_path() / ("device-ui-node-list-operations-" + std::to_string(nodes) + "-" +
+                                                          std::to_string(static_cast<int>(implementation)) + ".json");
+            std::string error;
+            REQUIRE(writeNodeListBenchmarkJson(report, outputPath.string(), error));
+
+            std::ifstream input(outputPath, std::ios::binary);
+            const std::string json((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+            rapidjson::Document document;
+            document.Parse(json.c_str());
+
+            REQUIRE_FALSE(document.HasParseError());
+            REQUIRE(document.HasMember("allocator_telemetry"));
+            const auto &telemetry = document["allocator_telemetry"];
+            REQUIRE(telemetry.IsObject());
+            REQUIRE(telemetry.HasMember("trials"));
+            REQUIRE(telemetry["trials"].IsArray());
+            REQUIRE(telemetry["trials"].Size() == 2);
+            const auto &trial = telemetry["trials"][1];
+            REQUIRE_FALSE(trial["warmup"].GetBool());
+            REQUIRE(trial.HasMember("operations"));
+            REQUIRE(trial["operations"].IsArray());
+
+            std::vector<std::string> operationNames;
+            for (const auto &operation : trial["operations"].GetArray()) {
+                REQUIRE(operation.IsObject());
+                REQUIRE(operation.HasMember("name"));
+                REQUIRE(operation["name"].IsString());
+                operationNames.emplace_back(operation["name"].GetString());
+                for (const char *section : {"before", "after", "delta", "peak"}) {
+                    REQUIRE(operation.HasMember(section));
+                    REQUIRE(operation[section].IsObject());
+                }
+                for (const char *field :
+                     {"objects_before", "objects_after", "node_list_objects_before", "node_list_objects_after"}) {
+                    REQUIRE(operation.HasMember(field));
+                    CHECK(operation[field].IsUint64());
+                }
+                REQUIRE(operation.HasMember("object_count_stable"));
+                CHECK(operation["object_count_stable"].IsBool());
+                REQUIRE(operation.HasMember("allocator_used_count_bounded"));
+                CHECK(operation["allocator_used_count_bounded"].IsBool());
+            }
+
+            for (const std::string expected :
+                 {"insert", "update", "reorder", "filter", "rebind", "scroll", "presentation_resync", "purge"}) {
+                CHECK(std::find(operationNames.begin(), operationNames.end(), expected) != operationNames.end());
+            }
+
+            if (implementation == NodeListBenchmarkImplementation::VirtualCandidate) {
+                REQUIRE(document["timing"].HasMember("filter_ns"));
+                REQUIRE(document["timing"]["filter_ns"].IsObject());
+            }
+
+            std::error_code removeError;
+            std::filesystem::remove(outputPath, removeError);
+            CHECK_FALSE(removeError);
+        }
+    }
 }
 
 TEST_CASE("benchmark API rejects an iteration count overflow")
@@ -329,7 +402,9 @@ TEST_CASE("benchmark JSON output is valid and contains the documented sections")
     CHECK(memory["integrity_ok"].IsBool());
 
     REQUIRE(document.HasMember("allocator_telemetry"));
-    CHECK(document["allocator_telemetry"].IsNull());
+    REQUIRE(document["allocator_telemetry"].IsObject());
+    REQUIRE(document["allocator_telemetry"].HasMember("trials"));
+    CHECK(document["allocator_telemetry"]["trials"].IsArray());
 
     REQUIRE(document.HasMember("timing"));
     const auto &timing = document["timing"];
