@@ -101,6 +101,13 @@ enum NodePanelIdx {
     node_tm2_idx
 };
 
+NodeId nodeIdFromPanel(lv_obj_t *panel)
+{
+    if (!panel || lv_obj_get_child_count(panel) <= node_lbl_idx)
+        return 0;
+    return static_cast<NodeId>(reinterpret_cast<uintptr_t>(panel->LV_OBJ_IDX(node_lbl_idx)->user_data));
+}
+
 enum ScrollDirection {
     scrollDownLeft = 1,
     scrollDown = 2,
@@ -143,49 +150,82 @@ void TFTView_320x240::selectNode(NodeId id)
 bool TFTView_320x240::nodeIsMessagable(NodeId id) const
 {
     const NodeRecord *record = nodeStore.find(id);
-    return record && id != ownNode && !record->unmessagable;
+    if (record)
+        return id != ownNode && !record->unmessagable;
+    lv_obj_t *panel = nodePanel(id);
+    return panel && id != ownNode &&
+           static_cast<eRole>(reinterpret_cast<uintptr_t>(panel->LV_OBJ_IDX(node_img_idx)->user_data)) != eRole::unmessagable;
 }
 
 uint8_t TFTView_320x240::nodeChannel(NodeId id) const
 {
     const NodeRecord *record = nodeStore.find(id);
-    return record ? record->channel : 0;
+    if (record)
+        return record->channel;
+    lv_obj_t *panel = nodePanel(id);
+    return panel ? static_cast<uint8_t>(reinterpret_cast<uintptr_t>(panel->user_data)) : 0;
 }
 
 bool TFTView_320x240::nodeHasKey(NodeId id) const
 {
     const NodeRecord *record = nodeStore.find(id);
-    return record && record->hasKey && !record->hasBadKey;
+    if (record)
+        return record->hasKey && !record->hasBadKey;
+    lv_obj_t *panel = nodePanel(id);
+    return panel && reinterpret_cast<uintptr_t>(panel->LV_OBJ_IDX(node_bat_idx)->user_data) == 1;
 }
 
 bool TFTView_320x240::nodeHasBadKey(NodeId id) const
 {
     const NodeRecord *record = nodeStore.find(id);
-    return record && record->hasBadKey;
+    if (record)
+        return record->hasBadKey;
+    lv_obj_t *panel = nodePanel(id);
+    return panel && reinterpret_cast<uintptr_t>(panel->LV_OBJ_IDX(node_bat_idx)->user_data) == 2;
 }
 
 int8_t TFTView_320x240::nodeHops(NodeId id) const
 {
     const NodeRecord *record = nodeStore.find(id);
-    return record ? record->hopsAway : -1;
+    if (record)
+        return record->hopsAway;
+    lv_obj_t *panel = nodePanel(id);
+    return panel ? static_cast<int8_t>(reinterpret_cast<intptr_t>(panel->LV_OBJ_IDX(node_sig_idx)->user_data)) : -1;
 }
 
 const char *TFTView_320x240::nodeDisplayName(NodeId id) const
 {
     const NodeRecord *record = nodeStore.find(id);
-    return record ? record->user.long_name : nullptr;
+    if (record)
+        return record->user.long_name;
+    lv_obj_t *panel = nodePanel(id);
+    return panel ? lv_label_get_text(panel->LV_OBJ_IDX(node_lbl_idx)) : nullptr;
 }
 
 const char *TFTView_320x240::nodeShortName(NodeId id) const
 {
     const NodeRecord *record = nodeStore.find(id);
-    return record ? record->user.short_name : nullptr;
+    if (record)
+        return record->user.short_name;
+    lv_obj_t *panel = nodePanel(id);
+    return panel ? lv_label_get_text(panel->LV_OBJ_IDX(node_lbs_idx)) : nullptr;
 }
 
 NodePosition TFTView_320x240::nodePosition(NodeId id) const
 {
     const NodeRecord *record = nodeStore.find(id);
-    return record ? record->position : NodePosition{};
+    if (record)
+        return record->position;
+    lv_obj_t *panel = nodePanel(id);
+    if (!panel)
+        return NodePosition{};
+    NodePosition position{};
+    position.latitude = static_cast<int32_t>(reinterpret_cast<intptr_t>(panel->LV_OBJ_IDX(node_pos1_idx)->user_data));
+    position.longitude = static_cast<int32_t>(reinterpret_cast<intptr_t>(panel->LV_OBJ_IDX(node_pos2_idx)->user_data));
+    position.known = position.latitude != 0 && position.longitude != 0;
+    if (position.known)
+        position.altitude = static_cast<int32_t>(std::strtol(lv_label_get_text(panel->LV_OBJ_IDX(node_pos2_idx)), nullptr, 10));
+    return position;
 }
 
 NodeId TFTView_320x240::nodePurgeCandidate(NodeId incoming) const
@@ -193,13 +233,17 @@ NodeId TFTView_320x240::nodePurgeCandidate(NodeId incoming) const
     if (!shouldMaintainNodeModel()) {
         uint32_t oldest = 0;
         uint32_t oldestLastHeard = UINT32_MAX;
-        for (const auto &entry : nodes) {
-            if (entry.first == incoming || entry.first == ownNode || chats.find(entry.first) != chats.end() || !entry.second)
+        const uint32_t childCount = lv_obj_get_child_count(objects.nodes_panel);
+        for (uint32_t index = 0; index < childCount; ++index) {
+            lv_obj_t *panel = lv_obj_get_child(objects.nodes_panel, static_cast<int32_t>(index));
+            const NodeId nodeId = nodeIdFromPanel(panel);
+            if (!nodeId || nodeId == incoming || nodeId == ownNode || chats.find(nodeId) != chats.end() ||
+                nodes.find(nodeId) == nodes.end())
                 continue;
             const uint32_t lastHeard =
-                static_cast<uint32_t>(reinterpret_cast<uintptr_t>(entry.second->LV_OBJ_IDX(node_lh_idx)->user_data));
-            if (!oldest || lastHeard < oldestLastHeard || (lastHeard == oldestLastHeard && entry.first < oldest)) {
-                oldest = entry.first;
+                static_cast<uint32_t>(reinterpret_cast<uintptr_t>(panel->LV_OBJ_IDX(node_lh_idx)->user_data));
+            if (!oldest || lastHeard < oldestLastHeard) {
+                oldest = nodeId;
                 oldestLastHeard = lastHeard;
             }
         }
@@ -530,6 +574,13 @@ bool TFTView_320x240::traceRoutePanelVisibleForTesting() const
 void TFTView_320x240::sendDirectTextForTesting(NodeId id, char *msg)
 {
     showMessages(id);
+    if (static_cast<NodeId>(reinterpret_cast<uintptr_t>(activeMsgContainer->user_data)) != id &&
+        (nodePanel(id) || nodeStore.find(id))) {
+        activeMsgContainer = messages[id];
+        if (!activeMsgContainer)
+            activeMsgContainer = newMessageContainer(id, 0, 0);
+        activeMsgContainer->user_data = reinterpret_cast<void *>(static_cast<uintptr_t>(id));
+    }
     handleAddMessage(msg);
 }
 
