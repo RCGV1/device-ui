@@ -116,6 +116,15 @@ class TFTView_320x240 : public MeshtasticView
     NodePosition nodePositionForTesting(NodeId id) const;
     NodeId nodePurgeCandidateForTesting(NodeId incoming) const;
     void corruptLegacyNodePanelForTesting(NodeId id);
+    void removeLegacyNodePanelForTesting(NodeId id);
+    void setControllerForTesting(ViewController *controller);
+    void setLoRaHopLimitForTesting(uint8_t hopLimit);
+    void selectNodeForTesting(NodeId id);
+    void scanSignalForTesting(uint32_t scanNo);
+    void startTraceRouteForTesting();
+    void sendDirectTextForTesting(NodeId id, char *msg);
+    uint8_t nodeHopLimitForTesting(NodeId id, int8_t unknownHops) const;
+    uintptr_t traceRouteNodeCallbackPayloadForTesting(NodeId id) const;
 #endif
 
     enum BasicSettings {
@@ -275,13 +284,13 @@ class TFTView_320x240 : public MeshtasticView
     void addNodeToTraceRoute(uint32_t nodeNum, lv_obj_t *panel);
     void purgeNode(uint32_t nodeNum);
     void removeSpinner(void);
+    void *traceRouteNodeCallbackUserData(NodeId id) const;
     void packetDetected(const meshtastic_MeshPacket &p);
     void writePacketLog(const meshtastic_MeshPacket &p);
     void updateStatistics(const meshtastic_MeshPacket &p);
     void updateSignalStrength(int32_t rssi, float snr);
     int32_t signalStrength2Percent(int32_t rx_rssi, float rx_snr);
     lv_obj_t *nodePanel(NodeId id) const;
-    NodeId nodeIdForPanel(const lv_obj_t *panel) const;
     void selectNode(NodeId id);
     bool nodeIsMessagable(NodeId id) const;
     uint8_t nodeChannel(NodeId id) const;

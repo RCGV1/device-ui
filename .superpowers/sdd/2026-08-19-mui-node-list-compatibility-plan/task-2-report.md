@@ -82,3 +82,37 @@ GREEN:
 
 - The repository's untracked build directories remain untracked. The accidental full `trunk fmt` invocation touched generated files inside those untracked directories before failing; none are part of the commit.
 - Existing legacy filter/highlight row code still reads legacy panel state by design, preserving Task 2's "do not alter filters/order/presentation" constraint.
+
+## Review Fix Round 1
+
+Addressed reviewer findings within Task 2 scope only:
+
+- Signal scanner channel lookup no longer reads `currentPanel->user_data`; it uses `nodeChannel(currentNode)` and therefore falls back safely to channel `0` when the selected node is missing from the model.
+- Trace-route route-node callbacks now carry the `NodeId` as callback user data. The callback resolves the retained panel only at the final navigation/presentation step and skips navigation when the legacy panel is missing.
+- Removed the unused `nodeIdForPanel()` helper.
+- Extended headless coverage to exercise selection, legacy callback adaptation, direct-message action behavior, hop-limit calculation, and signal-scanner/traceroute channel use after retained legacy panel corruption/removal.
+
+RED evidence:
+
+- Command:
+  - `PYTHONPATH=/Users/benjaminfaershtein/.codex/venvs/device-ui-native/lib/python3.14/site-packages cmake --build build-mui-node-list-headless --target tests -j4 && ./build-mui-node-list-headless/bin/tests --test-case="legacy action callbacks use NodeId model semantics after panel corruption"`
+- Expected failures before production fix:
+  - `position.channel == 3` failed with `7 == 3`, proving signal-scanner channel selection still depended on corrupted retained panel state.
+  - `traceRouteNodeCallbackPayload(...) == 0x1234abcd` failed with a panel pointer value, proving trace-route callback user data still carried a retained panel pointer.
+- Note:
+  - The initial RED test also exposed a fixture setup issue for hop-limit expectations (`2 == 3` while the test LoRa hop limit was unset). The fixture was corrected with `setLoRaHopLimit(7)` before the final GREEN run.
+
+GREEN evidence after fix:
+
+- Scoped format:
+  - `trunk fmt include/graphics/view/TFT/TFTView_320x240.h source/graphics/TFT/TFTView_320x240.cpp tests/MuiTestHarness.h tests/MuiTestHarness.cpp tests/test_MuiNodeSemanticBoundary.cpp`
+  - Checked 5 files, no issues.
+- Focused regression:
+  - `PYTHONPATH=/Users/benjaminfaershtein/.codex/venvs/device-ui-native/lib/python3.14/site-packages cmake --build build-mui-node-list-headless --target tests -j4 && ./build-mui-node-list-headless/bin/tests --test-case="legacy action callbacks use NodeId model semantics after panel corruption"`
+  - 1 passed, 0 failed, 45 skipped, 14 assertions passed.
+- Full doctest executable:
+  - `./build-mui-node-list-headless/bin/tests`
+  - 46 passed, 0 failed, 1558 assertions passed.
+- Full CTest:
+  - `ctest --test-dir build-mui-node-list-headless --output-on-failure`
+  - 9/9 tests passed.

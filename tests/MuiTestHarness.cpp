@@ -3,6 +3,7 @@
 #include "MuiTestHarness.h"
 #include "HeadlessDisplayDriver.h"
 #include "graphics/common/MeshtasticView.h"
+#include "graphics/common/ViewController.h"
 #include "graphics/common/ViewFactory.h"
 #include "graphics/driver/DisplayDriverConfig.h"
 #include "graphics/view/TFT/TFTView_320x240.h"
@@ -30,8 +31,34 @@ MuiTestHarness::MuiTestHarness()
 }
 #endif
 
+class MuiRecordingViewController : public ViewController
+{
+  public:
+    bool requestPosition(uint32_t to, uint8_t ch, uint32_t requestId) override
+    {
+        lastPosition = {to, ch, 0, requestId, false, ""};
+        return true;
+    }
+
+    void traceRoute(uint32_t to, uint8_t ch, uint8_t hopLimit, uint32_t requestId) override
+    {
+        lastTrace = {to, ch, hopLimit, requestId, false, ""};
+    }
+
+    void sendTextMessage(uint32_t to, uint8_t ch, uint8_t hopLimit, uint32_t msgTime, uint32_t requestId, bool usePkc,
+                         const char *textmsg) override
+    {
+        lastText = {to, ch, hopLimit, requestId, usePkc, textmsg ? textmsg : ""};
+    }
+
+    MuiControllerCall lastPosition;
+    MuiControllerCall lastText;
+    MuiControllerCall lastTrace;
+};
+
 MuiTestHarness::MuiTestHarness(const DisplayDriverConfig &config, DisplayDriver *displayDriver)
-    : driver(nullptr), displayDriver(displayDriver), view(nullptr)
+    : driver(nullptr), displayDriver(displayDriver), view(nullptr),
+      recordingController(std::make_unique<MuiRecordingViewController>())
 {
 #ifdef DEVICE_UI_HEADLESS_TEST
     driver = static_cast<HeadlessDisplayDriver *>(displayDriver);
@@ -46,7 +73,11 @@ MuiTestHarness::MuiTestHarness(const DisplayDriverConfig &config, DisplayDriver 
         view->setupUIConfig(uiConfig);
         pump();
     }
+
+    view->setControllerForTesting(recordingController.get());
 }
+
+MuiTestHarness::~MuiTestHarness() = default;
 
 bool MuiTestHarness::ready()
 {
@@ -295,6 +326,63 @@ uint32_t MuiTestHarness::nodePurgeCandidate(uint32_t incoming) const
 void MuiTestHarness::corruptLegacyNodePanel(uint32_t nodeId)
 {
     view->corruptLegacyNodePanelForTesting(nodeId);
+}
+
+void MuiTestHarness::removeLegacyNodePanel(uint32_t nodeId)
+{
+    view->removeLegacyNodePanelForTesting(nodeId);
+}
+
+void MuiTestHarness::setLoRaHopLimit(uint8_t hopLimit)
+{
+    view->setLoRaHopLimitForTesting(hopLimit);
+}
+
+void MuiTestHarness::selectNode(uint32_t nodeId)
+{
+    view->selectNodeForTesting(nodeId);
+}
+
+void MuiTestHarness::scanSignal(uint32_t scanNo)
+{
+    view->scanSignalForTesting(scanNo);
+}
+
+void MuiTestHarness::startTraceRoute()
+{
+    view->startTraceRouteForTesting();
+}
+
+void MuiTestHarness::sendDirectText(uint32_t nodeId, const char *msg)
+{
+    char buf[240]{};
+    std::strncpy(buf, msg, sizeof(buf) - 1);
+    view->sendDirectTextForTesting(nodeId, buf);
+}
+
+uint8_t MuiTestHarness::nodeHopLimit(uint32_t nodeId, int8_t unknownHops) const
+{
+    return view->nodeHopLimitForTesting(nodeId, unknownHops);
+}
+
+uintptr_t MuiTestHarness::traceRouteNodeCallbackPayload(uint32_t nodeId) const
+{
+    return view->traceRouteNodeCallbackPayloadForTesting(nodeId);
+}
+
+MuiControllerCall MuiTestHarness::lastPositionRequest() const
+{
+    return recordingController->lastPosition;
+}
+
+MuiControllerCall MuiTestHarness::lastTextMessage() const
+{
+    return recordingController->lastText;
+}
+
+MuiControllerCall MuiTestHarness::lastTraceRoute() const
+{
+    return recordingController->lastTrace;
 }
 
 const NodeStore &MuiTestHarness::store() const

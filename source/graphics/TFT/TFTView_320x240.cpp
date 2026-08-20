@@ -129,13 +129,9 @@ lv_obj_t *TFTView_320x240::nodePanel(NodeId id) const
     return it == nodes.end() ? nullptr : it->second;
 }
 
-NodeId TFTView_320x240::nodeIdForPanel(const lv_obj_t *panel) const
+void *TFTView_320x240::traceRouteNodeCallbackUserData(NodeId id) const
 {
-    for (const auto &entry : nodes) {
-        if (entry.second == panel)
-            return entry.first;
-    }
-    return 0;
+    return reinterpret_cast<void *>(static_cast<uintptr_t>(id));
 }
 
 void TFTView_320x240::selectNode(NodeId id)
@@ -384,6 +380,59 @@ void TFTView_320x240::corruptLegacyNodePanelForTesting(NodeId id)
     panel->LV_OBJ_IDX(node_pos2_idx)->user_data = nullptr;
     lv_label_set_text(panel->LV_OBJ_IDX(node_lbl_idx), "Panel Node");
     lv_label_set_text(panel->LV_OBJ_IDX(node_lbs_idx), "PANEL");
+}
+
+void TFTView_320x240::removeLegacyNodePanelForTesting(NodeId id)
+{
+    lv_obj_t *panel = nodePanel(id);
+    if (!panel)
+        return;
+
+    if (currentPanel == panel)
+        selectNode(0);
+    lv_obj_delete(panel);
+    nodes.erase(id);
+}
+
+void TFTView_320x240::setControllerForTesting(ViewController *controller)
+{
+    this->controller = controller;
+}
+
+void TFTView_320x240::setLoRaHopLimitForTesting(uint8_t hopLimit)
+{
+    db.config.lora.hop_limit = hopLimit;
+}
+
+void TFTView_320x240::selectNodeForTesting(NodeId id)
+{
+    selectNode(id);
+}
+
+void TFTView_320x240::scanSignalForTesting(uint32_t scanNo)
+{
+    scanSignal(scanNo);
+}
+
+void TFTView_320x240::startTraceRouteForTesting()
+{
+    ui_event_trace_route_start(nullptr);
+}
+
+void TFTView_320x240::sendDirectTextForTesting(NodeId id, char *msg)
+{
+    showMessages(id);
+    handleAddMessage(msg);
+}
+
+uint8_t TFTView_320x240::nodeHopLimitForTesting(NodeId id, int8_t unknownHops) const
+{
+    return nodeHopLimit(id, unknownHops);
+}
+
+uintptr_t TFTView_320x240::traceRouteNodeCallbackPayloadForTesting(NodeId id) const
+{
+    return (uintptr_t)traceRouteNodeCallbackUserData(id);
 }
 #endif
 
@@ -3258,9 +3307,12 @@ void TFTView_320x240::ui_event_trace_route_start(lv_event_t *e)
 void TFTView_320x240::ui_event_trace_route_node(lv_event_t *e)
 {
     // navigate to node in node list
-    lv_obj_t *panel = (lv_obj_t *)e->user_data;
-    THIS->ui_set_active(objects.nodes_button, objects.nodes_panel, objects.top_nodes_panel);
-    lv_obj_scroll_to_view(panel, LV_ANIM_ON);
+    uint32_t nodeNum = (unsigned long)e->user_data;
+    lv_obj_t *panel = THIS->nodePanel(nodeNum);
+    if (panel) {
+        THIS->ui_set_active(objects.nodes_button, objects.nodes_panel, objects.top_nodes_panel);
+        lv_obj_scroll_to_view(panel, LV_ANIM_ON);
+    }
 }
 
 void TFTView_320x240::removeSpinner(void)
@@ -5688,7 +5740,7 @@ void TFTView_320x240::scanSignal(uint32_t scanNo)
     } else {
         uint32_t requestId;
         uint32_t to = currentNode;
-        uint8_t ch = (uint8_t)(unsigned long)currentPanel->user_data;
+        uint8_t ch = nodeChannel(to);
         requestId = requests.addRequest(to, ResponseHandler::PositionRequest, (void *)to);
         controller->requestPosition(to, ch, requestId);
         objects.signal_scanner_panel->user_data = (void *)requestId;
@@ -5800,7 +5852,8 @@ void TFTView_320x240::addNodeToTraceRoute(uint32_t nodeNum, lv_obj_t *panel)
             if (record) {
                 if (nodeNum != ownNode) {
                     if (panelForNode)
-                        lv_obj_add_event_cb(btn, ui_event_trace_route_node, LV_EVENT_CLICKED, panelForNode);
+                        lv_obj_add_event_cb(btn, ui_event_trace_route_node, LV_EVENT_CLICKED,
+                                            traceRouteNodeCallbackUserData(nodeNum));
                     lv_label_set_text(label, nodeShortName(nodeNum) ? nodeShortName(nodeNum) : "");
                     if (strlen(lv_label_get_text(label)) >= 5)
                         lv_obj_set_pos(label, 35, -1);

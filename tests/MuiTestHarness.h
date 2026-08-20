@@ -6,11 +6,13 @@
 #include "lvgl.h"
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 class DisplayDriver;
 class HeadlessDisplayDriver;
+class MuiRecordingViewController;
 class TFTView_320x240;
 
 struct MuiNodeFixture {
@@ -26,11 +28,21 @@ struct MuiNodeFixture {
     bool hasTelemetry;
 };
 
+struct MuiControllerCall {
+    uint32_t to = 0;
+    uint8_t channel = 0;
+    uint8_t hopLimit = 0;
+    uint32_t requestId = 0;
+    bool usePkc = false;
+    std::string text;
+};
+
 class MuiTestHarness
 {
   public:
     MuiTestHarness();
     MuiTestHarness(const DisplayDriverConfig &config, DisplayDriver *displayDriver);
+    ~MuiTestHarness();
 
     bool ready();
     void resetNodeList();
@@ -69,6 +81,17 @@ class MuiTestHarness
     NodePosition nodePosition(uint32_t nodeId) const;
     uint32_t nodePurgeCandidate(uint32_t incoming) const;
     void corruptLegacyNodePanel(uint32_t nodeId);
+    void removeLegacyNodePanel(uint32_t nodeId);
+    void setLoRaHopLimit(uint8_t hopLimit);
+    void selectNode(uint32_t nodeId);
+    void scanSignal(uint32_t scanNo = 0);
+    void startTraceRoute();
+    void sendDirectText(uint32_t nodeId, const char *msg);
+    uint8_t nodeHopLimit(uint32_t nodeId, int8_t unknownHops) const;
+    uintptr_t traceRouteNodeCallbackPayload(uint32_t nodeId) const;
+    MuiControllerCall lastPositionRequest() const;
+    MuiControllerCall lastTextMessage() const;
+    MuiControllerCall lastTraceRoute() const;
     const NodeStore &store() const;
     const VisibleNodeIndex &visibleIndex() const;
     lv_obj_t *nodeListRootForTesting() const;
@@ -81,4 +104,5 @@ class MuiTestHarness
     HeadlessDisplayDriver *driver;
     DisplayDriver *displayDriver;
     TFTView_320x240 *view;
+    std::unique_ptr<MuiRecordingViewController> recordingController;
 };

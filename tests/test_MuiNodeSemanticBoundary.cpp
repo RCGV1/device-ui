@@ -7,6 +7,7 @@ TEST_CASE("node semantic helpers read model fields instead of retained legacy pa
 {
     MuiTestHarness harness;
     harness.resetNodeList();
+    harness.setLoRaHopLimit(7);
 
     harness.addNodeFixture(0x1234abcd, "MODL", "Model Node", 1000, MeshtasticView::router, true, false, 3);
     harness.updateHopsFixture(0x1234abcd, 2);
@@ -55,5 +56,42 @@ TEST_CASE("active direct chats protect model purge candidate selection")
     harness.addActiveChatFixture(0x10101010);
 
     CHECK(harness.nodePurgeCandidate(0x30303030) == 0x20202020);
+}
+
+TEST_CASE("legacy action callbacks use NodeId model semantics after panel corruption")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setLoRaHopLimit(7);
+
+    harness.addNodeFixture(0x1234abcd, "MODL", "Model Node", 1000, MeshtasticView::router, true, false, 3);
+    harness.updateHopsFixture(0x1234abcd, 2);
+    harness.corruptLegacyNodePanel(0x1234abcd);
+
+    harness.selectNode(0x1234abcd);
+    harness.scanSignal();
+    MuiControllerCall position = harness.lastPositionRequest();
+    CHECK(position.to == 0x1234abcd);
+    CHECK(position.channel == 3);
+
+    harness.startTraceRoute();
+    MuiControllerCall trace = harness.lastTraceRoute();
+    CHECK(trace.to == 0x1234abcd);
+    CHECK(trace.channel == 3);
+    CHECK(trace.hopLimit == 3);
+
+    harness.sendDirectText(0x1234abcd, "hello");
+    MuiControllerCall text = harness.lastTextMessage();
+    CHECK(text.to == 0x1234abcd);
+    CHECK(text.channel == 3);
+    CHECK(text.hopLimit == 3);
+    CHECK(text.usePkc);
+    CHECK(text.text == "hello");
+
+    CHECK(harness.nodeHopLimit(0x1234abcd, 5) == 3);
+    CHECK(harness.traceRouteNodeCallbackPayload(0x1234abcd) == 0x1234abcd);
+    harness.removeLegacyNodePanel(0x1234abcd);
+    CHECK(harness.traceRouteNodeCallbackPayload(0x1234abcd) == 0x1234abcd);
+    CHECK(harness.nodeChannel(0x1234abcd) == 3);
 }
 #endif
