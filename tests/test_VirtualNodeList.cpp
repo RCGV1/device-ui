@@ -455,6 +455,76 @@ TEST_CASE("VirtualNodeList matches legacy icon style and short-name fallback aft
           legacy.legacyRowSnapshot(nonPrintableShort).shortName);
 }
 
+TEST_CASE("VirtualNodeList resets pooled image recolor when a row is rebound after unmessagable")
+{
+    MuiTestHarness legacy;
+    legacy.resetNodeList();
+
+    lv_obj_t *virtualRoot = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(virtualRoot, 320, 240);
+    lv_obj_set_style_layout(virtualRoot, LV_LAYOUT_NONE, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    DummyActionSink sink;
+    MuiRowSnapshot reusedDarkNormal;
+    MuiRowSnapshot freshDarkNormal;
+    MuiRowSnapshot reusedBrightRouter;
+    MuiRowSnapshot freshBrightRouter;
+    {
+        VirtualNodeList list(virtualRoot, sink);
+        VisibleNodeIndex index;
+        NodeListFilter filter;
+        lv_obj_t *pooledRow = nullptr;
+
+        const auto syncCurrentLegacy = [&](NodeId id) {
+            index.rebuild(legacy.store(), filter, 0, NodeListFilterPolicy::LegacyCompatible);
+            list.sync(legacy.store(), index);
+            legacy.pump();
+            lv_obj_t *row = boundRow(virtualRoot, id);
+            REQUIRE(row != nullptr);
+            return row;
+        };
+
+        constexpr NodeId blockedFirst = 0x5555a001;
+        legacy.addNodeFixture(blockedFirst, "BLK1", "Blocked Prime", 1699999900U, MeshtasticView::client, true, true, 0);
+        pooledRow = syncCurrentLegacy(blockedFirst);
+        CHECK(snapshotVirtualRow(pooledRow).imageRecolor == 0xffff5555U);
+
+        constexpr NodeId darkNormal = 0x00000001;
+        legacy.resetNodeList();
+        legacy.addNodeFixture(darkNormal, "DRK1", "Fresh Dark Normal", 1699999900U, MeshtasticView::client, true, false, 0);
+        freshDarkNormal = legacy.legacyRowSnapshot(darkNormal);
+        lv_obj_t *darkRow = syncCurrentLegacy(darkNormal);
+        CHECK(darkRow == pooledRow);
+        reusedDarkNormal = snapshotVirtualRow(darkRow);
+
+        constexpr NodeId blockedSecond = 0x5555a002;
+        legacy.resetNodeList();
+        legacy.addNodeFixture(blockedSecond, "BLK2", "Blocked Prime Again", 1699999900U, MeshtasticView::client, true, true, 0);
+        lv_obj_t *blockedRow = syncCurrentLegacy(blockedSecond);
+        CHECK(blockedRow == pooledRow);
+        CHECK(snapshotVirtualRow(blockedRow).imageRecolor == 0xffff5555U);
+
+        constexpr NodeId brightRouter = 0x00fefefe;
+        legacy.resetNodeList();
+        legacy.addNodeFixture(brightRouter, "BRT1", "Fresh Bright Router", 1699999900U, MeshtasticView::router, true, false, 0);
+        freshBrightRouter = legacy.legacyRowSnapshot(brightRouter);
+        lv_obj_t *brightRow = syncCurrentLegacy(brightRouter);
+        CHECK(brightRow == pooledRow);
+        reusedBrightRouter = snapshotVirtualRow(brightRow);
+    }
+    lv_obj_delete(virtualRoot);
+
+    CHECK(reusedDarkNormal.imageBg == freshDarkNormal.imageBg);
+    CHECK(reusedDarkNormal.imageBorder == freshDarkNormal.imageBorder);
+    CHECK(reusedDarkNormal.imageRecolor == freshDarkNormal.imageRecolor);
+    CHECK(reusedDarkNormal.imageRecolorOpa == freshDarkNormal.imageRecolorOpa);
+
+    CHECK(reusedBrightRouter.imageBg == freshBrightRouter.imageBg);
+    CHECK(reusedBrightRouter.imageBorder == freshBrightRouter.imageBorder);
+    CHECK(reusedBrightRouter.imageRecolor == freshBrightRouter.imageRecolor);
+    CHECK(reusedBrightRouter.imageRecolorOpa == freshBrightRouter.imageRecolorOpa);
+}
+
 TEST_CASE("VirtualNodeList expansion and stable selection")
 {
     MuiTestHarness harness;

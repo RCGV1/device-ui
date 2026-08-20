@@ -78,6 +78,8 @@ void setRoleImage(const NodeRecord &record, lv_obj_t *img)
         return;
     }
 
+    lv_obj_remove_local_style_prop(img, LV_STYLE_IMAGE_RECOLOR, LV_PART_MAIN | LV_STATE_DEFAULT);
+
     switch (record.user.role) {
     case meshtastic_Config_DeviceConfig_Role_ROUTER:
     case meshtastic_Config_DeviceConfig_Role_REPEATER:

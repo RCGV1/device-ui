@@ -186,3 +186,44 @@ Addressed the remaining Important review findings only.
 - No integration/default/filter/order changes were made.
 - Static row-owned buffers were preserved.
 - Untracked build directories and `.codex/task3-venv` were preserved and not staged.
+
+## Review Fix Round 3
+
+Addressed the pooled-row image recolor state leak.
+
+### Changes
+
+- Added a regression that reuses the same `VirtualNodeList` pooled row:
+  - binds an unmessagable node and verifies the virtual row has local red recolor;
+  - resets the legacy node set to a fresh normal dark node, syncs the same virtual list, verifies the same row object is reused, then compares virtual row image style against the fresh legacy row;
+  - primes the same pooled row with unmessagable again, then repeats the comparison for a bright router row.
+- Fixed `VirtualNodeList::setRoleImage()` by removing the local `LV_STYLE_IMAGE_RECOLOR` property before normal-role binding.
+- Did not set a normal recolor color; normal rows still only set recolor opacity/background/border, matching legacy fresh rows.
+
+### RED Evidence
+
+- Command:
+  - `PATH="/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task3-venv/bin:$PATH" cmake --build build-mui-node-list-headless --target tests -j 8 && ./build-mui-node-list-headless/bin/tests "--test-case=*VirtualNodeList*"`
+- Expected failures after adding the pooled-row reuse regression:
+  - `reusedDarkNormal.imageRecolor == freshDarkNormal.imageRecolor` failed: `4294923605 == 4278190080`.
+  - `reusedBrightRouter.imageRecolor == freshBrightRouter.imageRecolor` failed: `4294923605 == 4278190080`.
+
+### GREEN Evidence
+
+- Focused virtual list:
+  - `PATH="/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task3-venv/bin:$PATH" cmake --build build-mui-node-list-headless --target tests -j 8 && ./build-mui-node-list-headless/bin/tests "--test-case=*VirtualNodeList*"`
+  - 11 test cases passed, 0 failed, 109 assertions passed.
+- Full CTest:
+  - `PATH="/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task3-venv/bin:$PATH" ctest --test-dir build-mui-node-list-headless --output-on-failure`
+  - 9/9 tests passed.
+  - Included `VirtualNodeListAllocator25`, `VirtualNodeListAllocator100`, and `VirtualNodeListAllocator250`.
+- Formatting/diff hygiene:
+  - `trunk fmt source/graphics/view/TFT/VirtualNodeList.cpp tests/test_VirtualNodeList.cpp`
+  - Checked 2 files, no issues.
+  - `git diff --check` passed.
+
+### Scope Notes
+
+- No integration/default/filter/order changes were made.
+- Static row-owned buffers were preserved.
+- Untracked build directories and `.codex/task3-venv` were preserved and not staged.
