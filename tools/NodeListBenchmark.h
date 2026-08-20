@@ -47,6 +47,7 @@ struct NodeListCandidateAllocatorTelemetry {
         NodeListAllocatorSnapshot after;
         NodeListAllocatorDelta delta;
         NodeListAllocatorSnapshot peak;
+        std::vector<NodeListAllocatorSnapshot> snapshots;
         size_t objectsBefore = 0;
         size_t objectsAfter = 0;
         size_t nodeListObjectsBefore = 0;

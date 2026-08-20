@@ -1,6 +1,7 @@
 #include "NodeListBenchmark.h"
 #include "libs/thorvg/rapidjson/document.h"
 #include <algorithm>
+#include <array>
 #include <doctest/doctest.h>
 #include <filesystem>
 #include <fstream>
@@ -9,6 +10,207 @@
 #include <string>
 
 #ifdef DEVICE_UI_HEADLESS_TEST
+namespace
+{
+constexpr std::array<const char *, 8> operationSequence = {
+    "insert", "update", "rebind", "filter", "reorder", "scroll", "presentation_resync", "purge"};
+constexpr uint64_t allocatorUsedCountSlack = 8;
+
+int64_t expectedDelta(uint64_t beforeValue, uint64_t afterValue)
+{
+    return afterValue >= beforeValue ? static_cast<int64_t>(afterValue - beforeValue)
+                                     : -static_cast<int64_t>(beforeValue - afterValue);
+}
+
+bool isAllocatorSnapshot(const rapidjson::Value &value)
+{
+    if (!value.IsObject()) {
+        return false;
+    }
+    for (const char *field : {"free_size", "biggest_free_block", "used_count", "fragmentation_percent"}) {
+        if (!value.HasMember(field) || !value[field].IsUint64()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool isAllocatorDeltaFor(const rapidjson::Value &delta, const rapidjson::Value &before, const rapidjson::Value &after)
+{
+    if (!delta.IsObject()) {
+        return false;
+    }
+    for (const char *field : {"free_size", "biggest_free_block", "used_count", "fragmentation_percent"}) {
+        if (!delta.HasMember(field) || !delta[field].IsInt64()) {
+            return false;
+        }
+    }
+    return delta["free_size"].GetInt64() == expectedDelta(before["free_size"].GetUint64(), after["free_size"].GetUint64()) &&
+           delta["biggest_free_block"].GetInt64() ==
+               expectedDelta(before["biggest_free_block"].GetUint64(), after["biggest_free_block"].GetUint64()) &&
+           delta["used_count"].GetInt64() == expectedDelta(before["used_count"].GetUint64(), after["used_count"].GetUint64()) &&
+           delta["fragmentation_percent"].GetInt64() ==
+               expectedDelta(before["fragmentation_percent"].GetUint64(), after["fragmentation_percent"].GetUint64());
+}
+
+bool peakMatchesSnapshots(const rapidjson::Value &peak, const rapidjson::Value &before, const rapidjson::Value &after,
+                          const rapidjson::Value &snapshots)
+{
+    if (!isAllocatorSnapshot(peak) || !snapshots.IsArray()) {
+        return false;
+    }
+    uint64_t minimumFreeSize = before["free_size"].GetUint64();
+    uint64_t minimumBiggestBlock = before["biggest_free_block"].GetUint64();
+    uint64_t maximumUsedCount = before["used_count"].GetUint64();
+    uint64_t maximumFragmentation = before["fragmentation_percent"].GetUint64();
+    for (const auto &snapshot : snapshots.GetArray()) {
+        if (!isAllocatorSnapshot(snapshot)) {
+            return false;
+        }
+        minimumFreeSize = std::min(minimumFreeSize, snapshot["free_size"].GetUint64());
+        minimumBiggestBlock = std::min(minimumBiggestBlock, snapshot["biggest_free_block"].GetUint64());
+        maximumUsedCount = std::max(maximumUsedCount, snapshot["used_count"].GetUint64());
+        maximumFragmentation = std::max(maximumFragmentation, snapshot["fragmentation_percent"].GetUint64());
+    }
+    minimumFreeSize = std::min(minimumFreeSize, after["free_size"].GetUint64());
+    minimumBiggestBlock = std::min(minimumBiggestBlock, after["biggest_free_block"].GetUint64());
+    maximumUsedCount = std::max(maximumUsedCount, after["used_count"].GetUint64());
+    maximumFragmentation = std::max(maximumFragmentation, after["fragmentation_percent"].GetUint64());
+    return peak["free_size"].GetUint64() == minimumFreeSize && peak["biggest_free_block"].GetUint64() == minimumBiggestBlock &&
+           peak["used_count"].GetUint64() == maximumUsedCount &&
+           peak["fragmentation_percent"].GetUint64() == maximumFragmentation;
+}
+
+bool validOperationTelemetry(const rapidjson::Value &operation, const char *expectedName)
+{
+    if (!operation.IsObject() || !operation.HasMember("name") || !operation["name"].IsString() ||
+        std::string(operation["name"].GetString()) != expectedName || !operation.HasMember("before") ||
+        !operation.HasMember("after") || !operation.HasMember("delta") || !operation.HasMember("peak") ||
+        !operation.HasMember("snapshots") || !isAllocatorSnapshot(operation["before"]) ||
+        !isAllocatorSnapshot(operation["after"]) ||
+        !isAllocatorDeltaFor(operation["delta"], operation["before"], operation["after"]) ||
+        !peakMatchesSnapshots(operation["peak"], operation["before"], operation["after"], operation["snapshots"])) {
+        return false;
+    }
+    for (const char *field : {"objects_before", "objects_after", "node_list_objects_before", "node_list_objects_after"}) {
+        if (!operation.HasMember(field) || !operation[field].IsUint64()) {
+            return false;
+        }
+    }
+    if (!operation.HasMember("object_count_stable") || !operation["object_count_stable"].IsBool() ||
+        !operation.HasMember("allocator_used_count_bounded") || !operation["allocator_used_count_bounded"].IsBool()) {
+        return false;
+    }
+    const bool expectedObjectStable =
+        operation["objects_before"].GetUint64() == operation["objects_after"].GetUint64() &&
+        operation["node_list_objects_before"].GetUint64() == operation["node_list_objects_after"].GetUint64();
+    const bool expectedAllocatorBounded =
+        operation["after"]["used_count"].GetUint64() <= operation["before"]["used_count"].GetUint64() + allocatorUsedCountSlack;
+    return operation["object_count_stable"].GetBool() == expectedObjectStable &&
+           operation["allocator_used_count_bounded"].GetBool() == expectedAllocatorBounded && expectedObjectStable &&
+           expectedAllocatorBounded;
+}
+
+bool validTask7BenchmarkSchema(const rapidjson::Document &document, NodeListBenchmarkImplementation expectedImplementation,
+                               size_t expectedNodes)
+{
+    if (!document.IsObject() || !document.HasMember("implementation") || !document["implementation"].IsObject() ||
+        !document["implementation"].HasMember("name") || !document["implementation"]["name"].IsString() ||
+        !document.HasMember("scenario") || !document["scenario"].IsObject() || !document["scenario"].HasMember("nodes") ||
+        !document["scenario"]["nodes"].IsUint64() || document["scenario"]["nodes"].GetUint64() != expectedNodes ||
+        !document.HasMember("allocator_telemetry") || !document["allocator_telemetry"].IsObject() ||
+        !document["allocator_telemetry"].HasMember("trials") || !document["allocator_telemetry"]["trials"].IsArray() ||
+        !document.HasMember("correctness") || !document["correctness"].IsObject()) {
+        return false;
+    }
+    const std::string implementationName = document["implementation"]["name"].GetString();
+    const bool candidate = expectedImplementation == NodeListBenchmarkImplementation::VirtualCandidate;
+    if (implementationName != (candidate ? "virtual_candidate" : "legacy")) {
+        return false;
+    }
+    const auto &trials = document["allocator_telemetry"]["trials"];
+    if (trials.Size() != 2) {
+        return false;
+    }
+    bool allNonWarmupOperationsStable = true;
+    for (rapidjson::SizeType trialIndex = 0; trialIndex < trials.Size(); ++trialIndex) {
+        const auto &trial = trials[trialIndex];
+        if (!trial.IsObject() || !trial.HasMember("iteration") || !trial["iteration"].IsUint64() ||
+            trial["iteration"].GetUint64() != trialIndex || !trial.HasMember("warmup") || !trial["warmup"].IsBool() ||
+            trial["warmup"].GetBool() != (trialIndex == 0) || !trial.HasMember("before") || !trial.HasMember("after") ||
+            !trial.HasMember("delta") || !trial.HasMember("peak") || !trial.HasMember("sync_snapshots") ||
+            !trial.HasMember("operations") || !isAllocatorSnapshot(trial["before"]) || !isAllocatorSnapshot(trial["after"]) ||
+            !isAllocatorDeltaFor(trial["delta"], trial["before"], trial["after"]) ||
+            !peakMatchesSnapshots(trial["peak"], trial["before"], trial["after"], trial["sync_snapshots"]) ||
+            !trial["operations"].IsArray() || trial["operations"].Size() != operationSequence.size()) {
+            return false;
+        }
+        for (rapidjson::SizeType operationIndex = 0; operationIndex < trial["operations"].Size(); ++operationIndex) {
+            const auto &operation = trial["operations"][operationIndex];
+            if (!validOperationTelemetry(operation, operationSequence[operationIndex])) {
+                return false;
+            }
+            if (!trial["warmup"].GetBool()) {
+                allNonWarmupOperationsStable = allNonWarmupOperationsStable && operation["object_count_stable"].GetBool() &&
+                                               operation["allocator_used_count_bounded"].GetBool();
+            }
+        }
+    }
+    const auto &correctness = document["correctness"];
+    for (const char *field : {"ready", "requested_node_count", "duplicate_update", "changed_name_and_role", "cap_purge",
+                              "resync_presentation_preserved_nodes", "offscreen_update", "all"}) {
+        if (!correctness.HasMember(field) || !correctness[field].IsBool()) {
+            return false;
+        }
+    }
+    bool expectedAll = correctness["ready"].GetBool() && correctness["requested_node_count"].GetBool() &&
+                       correctness["duplicate_update"].GetBool() && correctness["changed_name_and_role"].GetBool() &&
+                       correctness["cap_purge"].GetBool() && correctness["resync_presentation_preserved_nodes"].GetBool() &&
+                       correctness["offscreen_update"].GetBool();
+    if (candidate) {
+        if (!correctness.HasMember("candidate") || !correctness["candidate"].IsObject()) {
+            return false;
+        }
+        const auto &candidateChecks = correctness["candidate"];
+        for (const char *field : {"pool_bounded", "object_count_stable", "allocator_churn_bounded", "presentation"}) {
+            if (!candidateChecks.HasMember(field) || !candidateChecks[field].IsBool()) {
+                return false;
+            }
+        }
+        if (candidateChecks["allocator_churn_bounded"].GetBool() != allNonWarmupOperationsStable) {
+            return false;
+        }
+        expectedAll = expectedAll && candidateChecks["pool_bounded"].GetBool() &&
+                      candidateChecks["object_count_stable"].GetBool() && candidateChecks["allocator_churn_bounded"].GetBool() &&
+                      candidateChecks["presentation"].GetBool();
+    } else if (!correctness.HasMember("candidate") || !correctness["candidate"].IsNull()) {
+        return false;
+    }
+    return correctness["all"].GetBool() == expectedAll;
+}
+
+rapidjson::Document task7BenchmarkJson(NodeListBenchmarkImplementation implementation, size_t nodes)
+{
+    const auto report = runNodeListBenchmark({nodes, 1, 42, 1, implementation});
+    const auto outputPath =
+        std::filesystem::temp_directory_path() / ("device-ui-node-list-task7-schema-" + std::to_string(nodes) + "-" +
+                                                  std::to_string(static_cast<int>(implementation)) + ".json");
+    std::string error;
+    REQUIRE(writeNodeListBenchmarkJson(report, outputPath.string(), error));
+
+    std::ifstream input(outputPath, std::ios::binary);
+    const std::string json((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    rapidjson::Document document;
+    document.Parse(json.c_str());
+    REQUIRE_FALSE(document.HasParseError());
+
+    std::error_code removeError;
+    std::filesystem::remove(outputPath, removeError);
+    CHECK_FALSE(removeError);
+    return document;
+}
+} // namespace
+
 TEST_CASE("baseline benchmark emits list diagnostics")
 {
     const auto report = runNodeListBenchmark({25, 1, 42, 0});
@@ -239,65 +441,75 @@ TEST_CASE("benchmark JSON records per-operation stability telemetry for all vali
     for (const auto implementation :
          {NodeListBenchmarkImplementation::Legacy, NodeListBenchmarkImplementation::VirtualCandidate}) {
         for (const size_t nodes : {25U, 100U, 250U}) {
-            const auto report = runNodeListBenchmark({nodes, 1, 42, 1, implementation});
-            const auto outputPath =
-                std::filesystem::temp_directory_path() / ("device-ui-node-list-operations-" + std::to_string(nodes) + "-" +
-                                                          std::to_string(static_cast<int>(implementation)) + ".json");
-            std::string error;
-            REQUIRE(writeNodeListBenchmarkJson(report, outputPath.string(), error));
-
-            std::ifstream input(outputPath, std::ios::binary);
-            const std::string json((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-            rapidjson::Document document;
-            document.Parse(json.c_str());
-
-            REQUIRE_FALSE(document.HasParseError());
-            REQUIRE(document.HasMember("allocator_telemetry"));
-            const auto &telemetry = document["allocator_telemetry"];
-            REQUIRE(telemetry.IsObject());
-            REQUIRE(telemetry.HasMember("trials"));
-            REQUIRE(telemetry["trials"].IsArray());
-            REQUIRE(telemetry["trials"].Size() == 2);
-            const auto &trial = telemetry["trials"][1];
-            REQUIRE_FALSE(trial["warmup"].GetBool());
-            REQUIRE(trial.HasMember("operations"));
-            REQUIRE(trial["operations"].IsArray());
-
-            std::vector<std::string> operationNames;
-            for (const auto &operation : trial["operations"].GetArray()) {
-                REQUIRE(operation.IsObject());
-                REQUIRE(operation.HasMember("name"));
-                REQUIRE(operation["name"].IsString());
-                operationNames.emplace_back(operation["name"].GetString());
-                for (const char *section : {"before", "after", "delta", "peak"}) {
-                    REQUIRE(operation.HasMember(section));
-                    REQUIRE(operation[section].IsObject());
-                }
-                for (const char *field :
-                     {"objects_before", "objects_after", "node_list_objects_before", "node_list_objects_after"}) {
-                    REQUIRE(operation.HasMember(field));
-                    CHECK(operation[field].IsUint64());
-                }
-                REQUIRE(operation.HasMember("object_count_stable"));
-                CHECK(operation["object_count_stable"].IsBool());
-                REQUIRE(operation.HasMember("allocator_used_count_bounded"));
-                CHECK(operation["allocator_used_count_bounded"].IsBool());
-            }
-
-            for (const std::string expected :
-                 {"insert", "update", "reorder", "filter", "rebind", "scroll", "presentation_resync", "purge"}) {
-                CHECK(std::find(operationNames.begin(), operationNames.end(), expected) != operationNames.end());
-            }
-
+            auto document = task7BenchmarkJson(implementation, nodes);
+            CHECK(validTask7BenchmarkSchema(document, implementation, nodes));
             if (implementation == NodeListBenchmarkImplementation::VirtualCandidate) {
                 REQUIRE(document["timing"].HasMember("filter_ns"));
                 REQUIRE(document["timing"]["filter_ns"].IsObject());
             }
-
-            std::error_code removeError;
-            std::filesystem::remove(outputPath, removeError);
-            CHECK_FALSE(removeError);
         }
+    }
+}
+
+TEST_CASE("benchmark JSON schema validation rejects missing fields, stale deltas, stale peaks, and stale correctness")
+{
+    rapidjson::Document document = task7BenchmarkJson(NodeListBenchmarkImplementation::VirtualCandidate, 25);
+    REQUIRE(validTask7BenchmarkSchema(document, NodeListBenchmarkImplementation::VirtualCandidate, 25));
+
+    SUBCASE("missing operation array")
+    {
+        rapidjson::Document mutated;
+        mutated.CopyFrom(document, mutated.GetAllocator());
+        mutated["allocator_telemetry"]["trials"][0].RemoveMember("operations");
+        CHECK_FALSE(validTask7BenchmarkSchema(mutated, NodeListBenchmarkImplementation::VirtualCandidate, 25));
+    }
+
+    SUBCASE("wrong operation order")
+    {
+        rapidjson::Document mutated;
+        mutated.CopyFrom(document, mutated.GetAllocator());
+        mutated["allocator_telemetry"]["trials"][1]["operations"][0]["name"].SetString("reorder", mutated.GetAllocator());
+        CHECK_FALSE(validTask7BenchmarkSchema(mutated, NodeListBenchmarkImplementation::VirtualCandidate, 25));
+    }
+
+    SUBCASE("missing operation snapshot field")
+    {
+        rapidjson::Document mutated;
+        mutated.CopyFrom(document, mutated.GetAllocator());
+        mutated["allocator_telemetry"]["trials"][1]["operations"][0]["before"].RemoveMember("free_size");
+        CHECK_FALSE(validTask7BenchmarkSchema(mutated, NodeListBenchmarkImplementation::VirtualCandidate, 25));
+    }
+
+    SUBCASE("stale operation delta")
+    {
+        rapidjson::Document mutated;
+        mutated.CopyFrom(document, mutated.GetAllocator());
+        mutated["allocator_telemetry"]["trials"][1]["operations"][0]["delta"]["used_count"].SetInt64(123456);
+        CHECK_FALSE(validTask7BenchmarkSchema(mutated, NodeListBenchmarkImplementation::VirtualCandidate, 25));
+    }
+
+    SUBCASE("stale operation peak")
+    {
+        rapidjson::Document mutated;
+        mutated.CopyFrom(document, mutated.GetAllocator());
+        mutated["allocator_telemetry"]["trials"][1]["operations"][0]["peak"]["used_count"].SetUint64(0);
+        CHECK_FALSE(validTask7BenchmarkSchema(mutated, NodeListBenchmarkImplementation::VirtualCandidate, 25));
+    }
+
+    SUBCASE("stale operation stability boolean")
+    {
+        rapidjson::Document mutated;
+        mutated.CopyFrom(document, mutated.GetAllocator());
+        mutated["allocator_telemetry"]["trials"][1]["operations"][0]["object_count_stable"].SetBool(false);
+        CHECK_FALSE(validTask7BenchmarkSchema(mutated, NodeListBenchmarkImplementation::VirtualCandidate, 25));
+    }
+
+    SUBCASE("stale aggregate correctness")
+    {
+        rapidjson::Document mutated;
+        mutated.CopyFrom(document, mutated.GetAllocator());
+        mutated["correctness"]["candidate"]["allocator_churn_bounded"].SetBool(false);
+        CHECK_FALSE(validTask7BenchmarkSchema(mutated, NodeListBenchmarkImplementation::VirtualCandidate, 25));
     }
 }
 
