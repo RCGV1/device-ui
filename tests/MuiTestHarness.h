@@ -123,6 +123,7 @@ class MuiTestHarness
     const NodeStore &store() const;
     const VisibleNodeIndex &visibleIndex() const;
     MuiRowSnapshot legacyRowSnapshot(uint32_t nodeId) const;
+    lv_obj_t *legacyNodeListRootForTesting() const;
     lv_obj_t *nodeListRootForTesting() const;
     void showNodesScreen();
     HeadlessDisplayDriver *displayDriverForTesting() const;

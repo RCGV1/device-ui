@@ -104,6 +104,7 @@ class TFTView_320x240 : public MeshtasticView
 
 #ifdef UNIT_TEST
     lv_obj_t *nodeListRootForTesting(void) const;
+    lv_obj_t *legacyNodeListRootForTesting(void) const;
     void showNodesScreenForTesting(void);
     void resetNodeListForTesting(void);
     void updateNodesFilteredForTesting(bool reset);

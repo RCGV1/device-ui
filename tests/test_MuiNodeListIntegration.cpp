@@ -204,6 +204,68 @@ TEST_CASE("visible node index resyncs after retained model mutations")
 }
 
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+namespace
+{
+NodeId renderedVirtualNodeAt(MuiTestHarness &harness, size_t visibleIndex)
+{
+    lv_obj_t *root = harness.nodeListRootForTesting();
+    REQUIRE(root != nullptr);
+
+    size_t seen = 0;
+    const uint32_t childCount = lv_obj_get_child_count(root);
+    for (uint32_t index = 0; index < childCount; ++index) {
+        lv_obj_t *child = lv_obj_get_child(root, static_cast<int32_t>(index));
+        if (!child || lv_obj_has_flag(child, LV_OBJ_FLAG_HIDDEN) || lv_obj_get_child_count(child) < 11) {
+            continue;
+        }
+        if (seen == visibleIndex) {
+            return static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(child)));
+        }
+        seen++;
+    }
+
+    FAIL("visible virtual row not found");
+    return 0;
+}
+
+MuiRowSnapshot virtualRowSnapshot(MuiTestHarness &harness, NodeId id)
+{
+    lv_obj_t *root = harness.nodeListRootForTesting();
+    if (!root) {
+        return {};
+    }
+
+    const uint32_t childCount = lv_obj_get_child_count(root);
+    for (uint32_t index = 0; index < childCount; ++index) {
+        lv_obj_t *row = lv_obj_get_child(root, static_cast<int32_t>(index));
+        if (!row || lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN) || lv_obj_get_child_count(row) < 11 ||
+            static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(row))) != id) {
+            continue;
+        }
+
+        lv_obj_t *image = lv_obj_get_child(row, 0);
+        lv_obj_t *shortName = lv_obj_get_child(row, 3);
+        return {
+            lv_label_get_text(lv_obj_get_child(row, 2)),
+            lv_label_get_text(shortName),
+            lv_label_get_text(lv_obj_get_child(row, 4)),
+            lv_label_get_text(lv_obj_get_child(row, 5)),
+            lv_label_get_text(lv_obj_get_child(row, 6)),
+            lv_label_get_text(lv_obj_get_child(row, 7)),
+            lv_label_get_text(lv_obj_get_child(row, 8)),
+            lv_label_get_text(lv_obj_get_child(row, 9)),
+            lv_label_get_text(lv_obj_get_child(row, 10)),
+            lv_obj_get_y_aligned(shortName),
+            lv_color_to_u32(lv_obj_get_style_bg_color(image, LV_PART_MAIN)),
+            lv_color_to_u32(lv_obj_get_style_border_color(image, LV_PART_MAIN)),
+            lv_color_to_u32(lv_obj_get_style_image_recolor(image, LV_PART_MAIN)),
+            lv_obj_get_style_image_recolor_opa(image, LV_PART_MAIN),
+        };
+    }
+    return {};
+}
+} // namespace
+
 TEST_CASE("gated virtual node list uses a dedicated bounded host")
 {
     for (size_t nodeCount : {25U, 100U, 250U}) {
@@ -214,10 +276,94 @@ TEST_CASE("gated virtual node list uses a dedicated bounded host")
         harness.populateLegacyNodeFixtures(nodeCount);
 
         CHECK(harness.virtualNodeListEnabled());
+        CHECK(harness.legacyNodeListRootForTesting() != harness.nodeListRootForTesting());
+        CHECK(lv_obj_get_parent(harness.nodeListRootForTesting()) == lv_obj_get_parent(harness.legacyNodeListRootForTesting()));
         CHECK(harness.legacyRetainedNodeCount() == 0);
         CHECK(harness.renderedNodeCount() == nodeCount);
         CHECK(harness.visibleIndex().size() == nodeCount);
         CHECK(harness.nodeListObjectCount() <= 90);
+    }
+}
+
+TEST_CASE("gated virtual node list renders mutation resyncs")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.enableVirtualNodeListFixture();
+    harness.setCurrentTime(1700000000U);
+
+    SUBCASE("user update rebinds visible row text")
+    {
+        harness.addNodeFixture(0x11111111, "ONE", "One Node", 1699999900U);
+        REQUIRE(virtualRowSnapshot(harness, 0x11111111).longName == "One Node");
+
+        harness.updateNodeFixture(0x11111111, "TWO", "Two Node", static_cast<uint8_t>(MeshtasticView::router), true);
+
+        CHECK(virtualRowSnapshot(harness, 0x11111111).longName == "Two Node");
+        CHECK(virtualRowSnapshot(harness, 0x11111111).shortName == "TWO");
+    }
+
+    SUBCASE("filter change rebinds the visible virtual pool")
+    {
+        harness.addNodeFixture(0x11111111, "OLD", "Old Node", 100U);
+        harness.addNodeFixture(0x22222222, "NEW", "New Node", 1699999990U);
+
+        harness.setOfflineFilterFixture(true);
+
+        CHECK(virtualRowSnapshot(harness, 0x11111111).longName.empty());
+        CHECK(virtualRowSnapshot(harness, 0x22222222).longName == "New Node");
+        CHECK(renderedVirtualNodeAt(harness, 0) == 0x22222222);
+    }
+
+    SUBCASE("active-chat mutation is reflected in the model used by virtual purge")
+    {
+        harness.addNodeFixture(0x11111111, "KEEP", "Active Chat Node", 1U);
+        harness.addNodeFixture(0x22222222, "DROP", "Purge Candidate", 2U);
+
+        harness.addActiveChatFixture(0x11111111);
+        harness.addUntilPurgeFixture(249);
+
+        CHECK(harness.node(0x11111111) != nullptr);
+        CHECK(harness.node(0x22222222) == nullptr);
+        CHECK(harness.store().size() == 250);
+        CHECK(harness.visibleIndex().size() == 250);
+        CHECK(renderedVirtualNodeAt(harness, 0) == 0xb00000f8U);
+    }
+
+    SUBCASE("last-heard reorder rebinds first rendered row")
+    {
+        harness.addNodeFixture(0x11111111, "ONE", "One Node", 100U);
+        harness.addNodeFixture(0x22222222, "TWO", "Two Node", 200U);
+        REQUIRE(renderedVirtualNodeAt(harness, 0) == 0x22222222);
+
+        harness.setCurrentTime(300U);
+        harness.updateLastHeardFixture(0x11111111);
+
+        CHECK(renderedVirtualNodeAt(harness, 0) == 0x11111111);
+        CHECK(virtualRowSnapshot(harness, 0x11111111).lastHeard == "now");
+    }
+
+    SUBCASE("presentation resync preserves virtual host and re-renders rows")
+    {
+        harness.addNodeFixture(0x11111111, "ONE", "One Node", 1699999900U);
+        lv_obj_t *host = harness.nodeListRootForTesting();
+
+        harness.toggleResyncPresentationFixture();
+
+        CHECK(harness.nodeListRootForTesting() == host);
+        CHECK(virtualRowSnapshot(harness, 0x11111111).longName == "One Node");
+        CHECK(renderedVirtualNodeAt(harness, 0) == 0x11111111);
+    }
+
+    SUBCASE("purge removes the oldest model node and rebinds visible rows")
+    {
+        harness.addUntilPurgeFixture(251);
+
+        CHECK(harness.store().size() == 250);
+        CHECK(harness.visibleIndex().size() == 250);
+        CHECK(harness.node(0xb0000000U) == nullptr);
+        CHECK(virtualRowSnapshot(harness, 0xb0000000U).longName.empty());
+        CHECK(renderedVirtualNodeAt(harness, 0) == 0xb00000faU);
     }
 }
 #endif

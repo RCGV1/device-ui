@@ -234,6 +234,11 @@ lv_obj_t *TFTView_320x240::nodeListRootForTesting(void) const
     return objects.nodes_panel;
 }
 
+lv_obj_t *TFTView_320x240::legacyNodeListRootForTesting(void) const
+{
+    return objects.nodes_panel;
+}
+
 void TFTView_320x240::showNodesScreenForTesting(void)
 {
     ui_set_active(objects.nodes_button, objects.nodes_panel, objects.top_nodes_panel);
@@ -832,6 +837,11 @@ void TFTView_320x240::ui_set_active(lv_obj_t *b, lv_obj_t *p, lv_obj_t *tp)
 
     if (activePanel) {
         lv_obj_add_flag(activePanel, LV_OBJ_FLAG_HIDDEN);
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+        if (useVirtualNodeList && activePanel == objects.nodes_panel && virtualNodeListHost) {
+            lv_obj_add_flag(virtualNodeListHost, LV_OBJ_FLAG_HIDDEN);
+        }
+#endif
         if (activePanel == objects.messages_panel) {
             lv_obj_remove_state(objects.message_input_area, LV_STATE_FOCUSED);
             if (!lv_obj_has_flag(objects.keyboard, LV_OBJ_FLAG_HIDDEN)) {
@@ -855,6 +865,15 @@ void TFTView_320x240::ui_set_active(lv_obj_t *b, lv_obj_t *p, lv_obj_t *tp)
     }
 
     lv_obj_clear_flag(p, LV_OBJ_FLAG_HIDDEN);
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    if (useVirtualNodeList && p == objects.nodes_panel) {
+        ensureVirtualNodeList();
+        if (virtualNodeListHost) {
+            lv_obj_remove_flag(virtualNodeListHost, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(virtualNodeListHost);
+        }
+    }
+#endif
 
     if (tp) {
         if (activeTopPanel) {
@@ -7615,9 +7634,16 @@ void TFTView_320x240::ensureVirtualNodeList(void)
         return;
     }
 
-    virtualNodeListHost = lv_obj_create(objects.nodes_panel);
-    lv_obj_set_pos(virtualNodeListHost, 0, 0);
-    lv_obj_set_size(virtualNodeListHost, LV_PCT(100), LV_PCT(100));
+    lv_obj_t *hostParent = lv_obj_get_parent(objects.nodes_panel);
+    if (!hostParent) {
+        hostParent = lv_screen_active();
+    }
+
+    virtualNodeListHost = lv_obj_create(hostParent);
+    lv_obj_set_pos(virtualNodeListHost, lv_obj_get_x(objects.nodes_panel), lv_obj_get_y(objects.nodes_panel));
+    const int32_t width = lv_obj_get_width(objects.nodes_panel);
+    const int32_t height = lv_obj_get_height(objects.nodes_panel);
+    lv_obj_set_size(virtualNodeListHost, width > 0 ? width : LV_PCT(100), height > 0 ? height : LV_PCT(100));
     lv_obj_set_scroll_dir(virtualNodeListHost, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(virtualNodeListHost, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_set_style_pad_top(virtualNodeListHost, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -7627,6 +7653,10 @@ void TFTView_320x240::ensureVirtualNodeList(void)
     lv_obj_set_style_border_width(virtualNodeListHost, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(virtualNodeListHost, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_remove_flag(virtualNodeListHost, LV_OBJ_FLAG_SCROLL_CHAIN);
+    if (lv_obj_has_flag(objects.nodes_panel, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_add_flag(virtualNodeListHost, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_move_foreground(virtualNodeListHost);
     virtualNodeList.reset(new VirtualNodeList(virtualNodeListHost, *this));
 }
 #endif

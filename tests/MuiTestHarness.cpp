@@ -502,6 +502,11 @@ lv_obj_t *MuiTestHarness::nodeListRootForTesting() const
     return view->nodeListRootForTesting();
 }
 
+lv_obj_t *MuiTestHarness::legacyNodeListRootForTesting() const
+{
+    return view->legacyNodeListRootForTesting();
+}
+
 void MuiTestHarness::showNodesScreen()
 {
     view->showNodesScreenForTesting();
