@@ -402,6 +402,11 @@ NodeId TFTView_320x240::nodePurgeCandidateForTesting(NodeId incoming) const
     return nodePurgeCandidate(incoming);
 }
 
+void TFTView_320x240::purgeLegacyNodeForTesting(NodeId incoming)
+{
+    purgeNode(incoming);
+}
+
 void TFTView_320x240::corruptLegacyNodePanelForTesting(NodeId id)
 {
     lv_obj_t *panel = nodePanel(id);

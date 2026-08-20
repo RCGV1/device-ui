@@ -59,12 +59,29 @@ struct NodeListCandidateAllocatorTelemetry {
     struct Trial {
         size_t iteration = 0;
         bool warmup = false;
+        size_t cycleCount = 0;
         NodeListAllocatorSnapshot before;
         std::vector<NodeListAllocatorSnapshot> syncSnapshots;
         NodeListAllocatorSnapshot after;
         NodeListAllocatorDelta delta;
         NodeListAllocatorSnapshot peak;
         std::vector<Operation> operations;
+        size_t objectsBefore = 0;
+        size_t objectsAfter = 0;
+        size_t nodeListObjectsBefore = 0;
+        size_t nodeListObjectsAfter = 0;
+        size_t retainedNodesBefore = 0;
+        size_t retainedNodesAfter = 0;
+        size_t nodeStoreSizeBefore = 0;
+        size_t nodeStoreSizeAfter = 0;
+        size_t nodeCountBefore = 0;
+        size_t nodeCountAfter = 0;
+        bool objectCountStable = false;
+        bool retainedNodesStable = false;
+        bool nodeStoreSizeStable = false;
+        bool nodeCountStable = false;
+        bool allocatorUsedCountBounded = false;
+        bool terminalStable = false;
     };
 
     std::string meaning;

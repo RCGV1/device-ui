@@ -107,6 +107,7 @@ class MuiTestHarness
     const char *nodeShortName(uint32_t nodeId) const;
     NodePosition nodePosition(uint32_t nodeId) const;
     uint32_t nodePurgeCandidate(uint32_t incoming) const;
+    void purgeLegacyNode(uint32_t incoming);
     void corruptLegacyNodePanel(uint32_t nodeId);
     void removeLegacyNodePanel(uint32_t nodeId);
     void setLoRaHopLimit(uint8_t hopLimit);

@@ -111,6 +111,41 @@ bool validOperationTelemetry(const rapidjson::Value &operation, const char *expe
            expectedAllocatorBounded;
 }
 
+bool validTerminalTelemetry(const rapidjson::Value &terminal, const rapidjson::Value &trialBefore,
+                            const rapidjson::Value &trialAfter)
+{
+    if (!terminal.IsObject()) {
+        return false;
+    }
+    for (const char *field :
+         {"objects_before", "objects_after", "node_list_objects_before", "node_list_objects_after", "retained_nodes_before",
+          "retained_nodes_after", "node_store_size_before", "node_store_size_after", "node_count_before", "node_count_after"}) {
+        if (!terminal.HasMember(field) || !terminal[field].IsUint64()) {
+            return false;
+        }
+    }
+    for (const char *field : {"object_count_stable", "retained_nodes_stable", "node_store_size_stable", "node_count_stable",
+                              "allocator_used_count_bounded", "all"}) {
+        if (!terminal.HasMember(field) || !terminal[field].IsBool()) {
+            return false;
+        }
+    }
+    const bool objectStable = terminal["objects_before"].GetUint64() == terminal["objects_after"].GetUint64() &&
+                              terminal["node_list_objects_before"].GetUint64() == terminal["node_list_objects_after"].GetUint64();
+    const bool retainedStable = terminal["retained_nodes_before"].GetUint64() == terminal["retained_nodes_after"].GetUint64();
+    const bool storeStable = terminal["node_store_size_before"].GetUint64() == terminal["node_store_size_after"].GetUint64();
+    const bool nodeCountStable = terminal["node_count_before"].GetUint64() == terminal["node_count_after"].GetUint64();
+    const bool allocatorBounded =
+        trialAfter["used_count"].GetUint64() <= trialBefore["used_count"].GetUint64() + allocatorUsedCountSlack;
+    return terminal["object_count_stable"].GetBool() == objectStable &&
+           terminal["retained_nodes_stable"].GetBool() == retainedStable &&
+           terminal["node_store_size_stable"].GetBool() == storeStable &&
+           terminal["node_count_stable"].GetBool() == nodeCountStable &&
+           terminal["allocator_used_count_bounded"].GetBool() == allocatorBounded &&
+           terminal["all"].GetBool() == (objectStable && retainedStable && storeStable && nodeCountStable && allocatorBounded) &&
+           terminal["all"].GetBool();
+}
+
 bool validTask7BenchmarkSchema(const rapidjson::Document &document, NodeListBenchmarkImplementation expectedImplementation,
                                size_t expectedNodes)
 {
@@ -132,28 +167,33 @@ bool validTask7BenchmarkSchema(const rapidjson::Document &document, NodeListBenc
     if (trials.Size() != 2) {
         return false;
     }
-    bool allNonWarmupOperationsStable = true;
+    bool allNonWarmupCyclesStable = true;
     for (rapidjson::SizeType trialIndex = 0; trialIndex < trials.Size(); ++trialIndex) {
         const auto &trial = trials[trialIndex];
         if (!trial.IsObject() || !trial.HasMember("iteration") || !trial["iteration"].IsUint64() ||
             trial["iteration"].GetUint64() != trialIndex || !trial.HasMember("warmup") || !trial["warmup"].IsBool() ||
             trial["warmup"].GetBool() != (trialIndex == 0) || !trial.HasMember("before") || !trial.HasMember("after") ||
             !trial.HasMember("delta") || !trial.HasMember("peak") || !trial.HasMember("sync_snapshots") ||
-            !trial.HasMember("operations") || !isAllocatorSnapshot(trial["before"]) || !isAllocatorSnapshot(trial["after"]) ||
-            !isAllocatorDeltaFor(trial["delta"], trial["before"], trial["after"]) ||
+            !trial.HasMember("operations") || !trial.HasMember("terminal") || !trial.HasMember("cycle_count") ||
+            !trial["cycle_count"].IsUint64() || trial["cycle_count"].GetUint64() != 2 || !isAllocatorSnapshot(trial["before"]) ||
+            !isAllocatorSnapshot(trial["after"]) || !isAllocatorDeltaFor(trial["delta"], trial["before"], trial["after"]) ||
             !peakMatchesSnapshots(trial["peak"], trial["before"], trial["after"], trial["sync_snapshots"]) ||
-            !trial["operations"].IsArray() || trial["operations"].Size() != operationSequence.size()) {
+            !validTerminalTelemetry(trial["terminal"], trial["before"], trial["after"]) || !trial["operations"].IsArray() ||
+            trial["operations"].Size() != operationSequence.size() * trial["cycle_count"].GetUint64()) {
             return false;
         }
         for (rapidjson::SizeType operationIndex = 0; operationIndex < trial["operations"].Size(); ++operationIndex) {
             const auto &operation = trial["operations"][operationIndex];
-            if (!validOperationTelemetry(operation, operationSequence[operationIndex])) {
+            if (!validOperationTelemetry(operation, operationSequence[operationIndex % operationSequence.size()])) {
                 return false;
             }
             if (!trial["warmup"].GetBool()) {
-                allNonWarmupOperationsStable = allNonWarmupOperationsStable && operation["object_count_stable"].GetBool() &&
-                                               operation["allocator_used_count_bounded"].GetBool();
+                allNonWarmupCyclesStable = allNonWarmupCyclesStable && operation["object_count_stable"].GetBool() &&
+                                           operation["allocator_used_count_bounded"].GetBool();
             }
+        }
+        if (!trial["warmup"].GetBool()) {
+            allNonWarmupCyclesStable = allNonWarmupCyclesStable && trial["terminal"]["all"].GetBool();
         }
     }
     const auto &correctness = document["correctness"];
@@ -177,7 +217,7 @@ bool validTask7BenchmarkSchema(const rapidjson::Document &document, NodeListBenc
                 return false;
             }
         }
-        if (candidateChecks["allocator_churn_bounded"].GetBool() != allNonWarmupOperationsStable) {
+        if (candidateChecks["allocator_churn_bounded"].GetBool() != allNonWarmupCyclesStable) {
             return false;
         }
         expectedAll = expectedAll && candidateChecks["pool_bounded"].GetBool() &&
@@ -186,7 +226,7 @@ bool validTask7BenchmarkSchema(const rapidjson::Document &document, NodeListBenc
     } else if (!correctness.HasMember("candidate") || !correctness["candidate"].IsNull()) {
         return false;
     }
-    return correctness["all"].GetBool() == expectedAll;
+    return correctness["all"].GetBool() == (expectedAll && allNonWarmupCyclesStable);
 }
 
 rapidjson::Document task7BenchmarkJson(NodeListBenchmarkImplementation implementation, size_t nodes)
@@ -453,63 +493,71 @@ TEST_CASE("benchmark JSON records per-operation stability telemetry for all vali
 
 TEST_CASE("benchmark JSON schema validation rejects missing fields, stale deltas, stale peaks, and stale correctness")
 {
-    rapidjson::Document document = task7BenchmarkJson(NodeListBenchmarkImplementation::VirtualCandidate, 25);
-    REQUIRE(validTask7BenchmarkSchema(document, NodeListBenchmarkImplementation::VirtualCandidate, 25));
+    for (const auto implementation :
+         {NodeListBenchmarkImplementation::Legacy, NodeListBenchmarkImplementation::VirtualCandidate}) {
+        for (const size_t nodes : {25U, 100U, 250U}) {
+            rapidjson::Document document = task7BenchmarkJson(implementation, nodes);
+            REQUIRE(validTask7BenchmarkSchema(document, implementation, nodes));
 
-    SUBCASE("missing operation array")
-    {
-        rapidjson::Document mutated;
-        mutated.CopyFrom(document, mutated.GetAllocator());
-        mutated["allocator_telemetry"]["trials"][0].RemoveMember("operations");
-        CHECK_FALSE(validTask7BenchmarkSchema(mutated, NodeListBenchmarkImplementation::VirtualCandidate, 25));
-    }
+            for (rapidjson::SizeType trialIndex = 0; trialIndex < document["allocator_telemetry"]["trials"].Size();
+                 ++trialIndex) {
+                rapidjson::Document missingOperations;
+                missingOperations.CopyFrom(document, missingOperations.GetAllocator());
+                missingOperations["allocator_telemetry"]["trials"][trialIndex].RemoveMember("operations");
+                CHECK_FALSE(validTask7BenchmarkSchema(missingOperations, implementation, nodes));
 
-    SUBCASE("wrong operation order")
-    {
-        rapidjson::Document mutated;
-        mutated.CopyFrom(document, mutated.GetAllocator());
-        mutated["allocator_telemetry"]["trials"][1]["operations"][0]["name"].SetString("reorder", mutated.GetAllocator());
-        CHECK_FALSE(validTask7BenchmarkSchema(mutated, NodeListBenchmarkImplementation::VirtualCandidate, 25));
-    }
+                rapidjson::Document wrongOrder;
+                wrongOrder.CopyFrom(document, wrongOrder.GetAllocator());
+                wrongOrder["allocator_telemetry"]["trials"][trialIndex]["operations"][0]["name"].SetString(
+                    "reorder", wrongOrder.GetAllocator());
+                CHECK_FALSE(validTask7BenchmarkSchema(wrongOrder, implementation, nodes));
 
-    SUBCASE("missing operation snapshot field")
-    {
-        rapidjson::Document mutated;
-        mutated.CopyFrom(document, mutated.GetAllocator());
-        mutated["allocator_telemetry"]["trials"][1]["operations"][0]["before"].RemoveMember("free_size");
-        CHECK_FALSE(validTask7BenchmarkSchema(mutated, NodeListBenchmarkImplementation::VirtualCandidate, 25));
-    }
+                rapidjson::Document missingOperationSnapshot;
+                missingOperationSnapshot.CopyFrom(document, missingOperationSnapshot.GetAllocator());
+                missingOperationSnapshot["allocator_telemetry"]["trials"][trialIndex]["operations"][0]["before"].RemoveMember(
+                    "free_size");
+                CHECK_FALSE(validTask7BenchmarkSchema(missingOperationSnapshot, implementation, nodes));
 
-    SUBCASE("stale operation delta")
-    {
-        rapidjson::Document mutated;
-        mutated.CopyFrom(document, mutated.GetAllocator());
-        mutated["allocator_telemetry"]["trials"][1]["operations"][0]["delta"]["used_count"].SetInt64(123456);
-        CHECK_FALSE(validTask7BenchmarkSchema(mutated, NodeListBenchmarkImplementation::VirtualCandidate, 25));
-    }
+                rapidjson::Document staleOperationDelta;
+                staleOperationDelta.CopyFrom(document, staleOperationDelta.GetAllocator());
+                staleOperationDelta["allocator_telemetry"]["trials"][trialIndex]["operations"][0]["delta"]["used_count"].SetInt64(
+                    123456);
+                CHECK_FALSE(validTask7BenchmarkSchema(staleOperationDelta, implementation, nodes));
 
-    SUBCASE("stale operation peak")
-    {
-        rapidjson::Document mutated;
-        mutated.CopyFrom(document, mutated.GetAllocator());
-        mutated["allocator_telemetry"]["trials"][1]["operations"][0]["peak"]["used_count"].SetUint64(0);
-        CHECK_FALSE(validTask7BenchmarkSchema(mutated, NodeListBenchmarkImplementation::VirtualCandidate, 25));
-    }
+                rapidjson::Document staleOperationPeak;
+                staleOperationPeak.CopyFrom(document, staleOperationPeak.GetAllocator());
+                staleOperationPeak["allocator_telemetry"]["trials"][trialIndex]["operations"][0]["peak"]["used_count"].SetUint64(
+                    0);
+                CHECK_FALSE(validTask7BenchmarkSchema(staleOperationPeak, implementation, nodes));
 
-    SUBCASE("stale operation stability boolean")
-    {
-        rapidjson::Document mutated;
-        mutated.CopyFrom(document, mutated.GetAllocator());
-        mutated["allocator_telemetry"]["trials"][1]["operations"][0]["object_count_stable"].SetBool(false);
-        CHECK_FALSE(validTask7BenchmarkSchema(mutated, NodeListBenchmarkImplementation::VirtualCandidate, 25));
-    }
+                rapidjson::Document staleOperationStable;
+                staleOperationStable.CopyFrom(document, staleOperationStable.GetAllocator());
+                staleOperationStable["allocator_telemetry"]["trials"][trialIndex]["operations"][0]["object_count_stable"].SetBool(
+                    false);
+                CHECK_FALSE(validTask7BenchmarkSchema(staleOperationStable, implementation, nodes));
 
-    SUBCASE("stale aggregate correctness")
-    {
-        rapidjson::Document mutated;
-        mutated.CopyFrom(document, mutated.GetAllocator());
-        mutated["correctness"]["candidate"]["allocator_churn_bounded"].SetBool(false);
-        CHECK_FALSE(validTask7BenchmarkSchema(mutated, NodeListBenchmarkImplementation::VirtualCandidate, 25));
+                rapidjson::Document missingTrialSnapshot;
+                missingTrialSnapshot.CopyFrom(document, missingTrialSnapshot.GetAllocator());
+                missingTrialSnapshot["allocator_telemetry"]["trials"][trialIndex]["before"].RemoveMember("free_size");
+                CHECK_FALSE(validTask7BenchmarkSchema(missingTrialSnapshot, implementation, nodes));
+
+                rapidjson::Document staleTrialDelta;
+                staleTrialDelta.CopyFrom(document, staleTrialDelta.GetAllocator());
+                staleTrialDelta["allocator_telemetry"]["trials"][trialIndex]["delta"]["used_count"].SetInt64(123456);
+                CHECK_FALSE(validTask7BenchmarkSchema(staleTrialDelta, implementation, nodes));
+
+                rapidjson::Document staleTrialPeak;
+                staleTrialPeak.CopyFrom(document, staleTrialPeak.GetAllocator());
+                staleTrialPeak["allocator_telemetry"]["trials"][trialIndex]["peak"]["used_count"].SetUint64(0);
+                CHECK_FALSE(validTask7BenchmarkSchema(staleTrialPeak, implementation, nodes));
+
+                rapidjson::Document staleTerminal;
+                staleTerminal.CopyFrom(document, staleTerminal.GetAllocator());
+                staleTerminal["allocator_telemetry"]["trials"][trialIndex]["terminal"]["allocator_used_count_bounded"].SetBool(
+                    false);
+                CHECK_FALSE(validTask7BenchmarkSchema(staleTerminal, implementation, nodes));
+            }
+        }
     }
 }
 

@@ -124,6 +124,7 @@ class TFTView_320x240 : public MeshtasticView
     const char *nodeShortNameForTesting(NodeId id) const;
     NodePosition nodePositionForTesting(NodeId id) const;
     NodeId nodePurgeCandidateForTesting(NodeId incoming) const;
+    void purgeLegacyNodeForTesting(NodeId incoming);
     void corruptLegacyNodePanelForTesting(NodeId id);
     void removeLegacyNodePanelForTesting(NodeId id);
     void setControllerForTesting(ViewController *controller);

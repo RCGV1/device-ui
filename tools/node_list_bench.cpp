@@ -49,6 +49,7 @@ struct NodeFixture {
 
 constexpr const char *comparisonScope = "Host-relative structural, CPU, and allocator comparison; not hardware timing.";
 constexpr size_t allocatorUsedCountSlack = 8;
+constexpr size_t measuredCycleCount = 2;
 
 const char *implementationName(NodeListBenchmarkImplementation implementation)
 {
@@ -312,6 +313,39 @@ bool trialOperationsAreStable(const NodeListCandidateAllocatorTelemetry::Trial &
                        [](const auto &operation) { return operation.objectCountStable && operation.allocatorUsedCountBounded; });
 }
 
+void captureTerminalBefore(NodeListCandidateAllocatorTelemetry::Trial &trial, const MuiTestHarness &harness, size_t retainedNodes,
+                           size_t nodeStoreSize, size_t nodeCount)
+{
+    trial.objectsBefore = harness.objectCount();
+    trial.nodeListObjectsBefore = harness.nodeListObjectCount();
+    trial.retainedNodesBefore = retainedNodes;
+    trial.nodeStoreSizeBefore = nodeStoreSize;
+    trial.nodeCountBefore = nodeCount;
+}
+
+void captureTerminalAfter(NodeListCandidateAllocatorTelemetry::Trial &trial, const MuiTestHarness &harness, size_t retainedNodes,
+                          size_t nodeStoreSize, size_t nodeCount)
+{
+    trial.objectsAfter = harness.objectCount();
+    trial.nodeListObjectsAfter = harness.nodeListObjectCount();
+    trial.retainedNodesAfter = retainedNodes;
+    trial.nodeStoreSizeAfter = nodeStoreSize;
+    trial.nodeCountAfter = nodeCount;
+    trial.objectCountStable =
+        trial.objectsBefore == trial.objectsAfter && trial.nodeListObjectsBefore == trial.nodeListObjectsAfter;
+    trial.retainedNodesStable = trial.retainedNodesBefore == trial.retainedNodesAfter;
+    trial.nodeStoreSizeStable = trial.nodeStoreSizeBefore == trial.nodeStoreSizeAfter;
+    trial.nodeCountStable = trial.nodeCountBefore == trial.nodeCountAfter;
+    trial.allocatorUsedCountBounded = retainedAllocatorBlockCountIsBounded(trial.before, trial.after);
+    trial.terminalStable = trial.objectCountStable && trial.retainedNodesStable && trial.nodeStoreSizeStable &&
+                           trial.nodeCountStable && trial.allocatorUsedCountBounded;
+}
+
+bool trialTerminalIsStable(const NodeListCandidateAllocatorTelemetry::Trial &trial)
+{
+    return trial.terminalStable;
+}
+
 std::string escapeJson(std::string_view value)
 {
     std::ostringstream output;
@@ -531,118 +565,137 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
         allocatorTrial.syncSnapshots.clear();
         allocatorTrial.before = captureAllocatorSnapshot();
         allocatorTrial.peak = allocatorTrial.before;
+        captureTerminalBefore(allocatorTrial, harness, index.ids().size(), store.size(), index.ids().size());
 
-        const uint64_t insertNs = recordOperation(allocatorTrial, harness, "insert", [&](auto &operation) {
-            for (const auto &fixture : ordered) {
-                store.upsertUser(fixture.id, fixture.channel, fixture.lastHeard, makeUser(fixture), false);
-            }
-            sync(&operation);
-        });
-
-        const uint64_t updateNs = recordOperation(allocatorTrial, harness, "update", [&](auto &operation) {
-            for (size_t i = 0; i < fixtures.size(); ++i) {
-                const auto &fixture = fixtures[i];
-                NodeFixture updated = fixture;
-                updated.role = static_cast<uint8_t>((fixture.role + 1) % 7);
-                store.upsertUser(updated.id, updated.channel, updated.lastHeard,
-                                 makeUser(updated, "Updated Node " + std::to_string(i)), false);
-            }
-            const auto &changed = fixtures.front();
-            NodeFixture duplicate = changed;
-            duplicate.shortName = "DUP1";
-            duplicate.longName = "Duplicate First";
-            duplicate.role = static_cast<uint8_t>(MeshtasticView::client);
-            duplicate.hasKey = true;
-            duplicate.unmessagable = false;
-            store.upsertUser(duplicate.id, duplicate.channel, duplicate.lastHeard, makeUser(duplicate), false);
-            duplicate.shortName = "DUP2";
-            duplicate.longName = "Duplicate Final";
-            duplicate.role = static_cast<uint8_t>(MeshtasticView::router);
-            store.upsertUser(duplicate.id, duplicate.channel, duplicate.lastHeard, makeUser(duplicate), false);
-            sync(&operation);
-        });
-
-        applyMixedState(store, fixtures);
-        const auto &changed = fixtures.front();
-        if (fixtures.size() > 1) {
-            const auto &offscreen = fixtures.back();
-            store.upsertUser(offscreen.id, offscreen.channel, offscreen.lastHeard, makeUser(offscreen, "Offscreen Updated"),
-                             false);
-            recordOperation(allocatorTrial, harness, "rebind", [&](auto &operation) { sync(&operation); });
-            const auto *offscreenRecord = store.find(offscreen.id);
-            offscreenUpdateOk =
-                offscreenUpdateOk && offscreenRecord && std::strcmp(offscreenRecord->user.long_name, "Offscreen Updated") == 0;
-        } else {
-            recordOperation(allocatorTrial, harness, "rebind", [&](auto &operation) { sync(&operation); });
-        }
-
-        const uint64_t filterNs = recordOperation(allocatorTrial, harness, "filter", [&](auto &operation) {
-            filter.position = true;
-            sync(&operation);
-            filter.position = false;
-            sync(&operation);
-        });
-
-        std::mt19937 orderRandom(options.seed ^ static_cast<uint32_t>(iteration + 1));
-        std::shuffle(fixtures.begin(), fixtures.end(), orderRandom);
-        const uint64_t reorderNs = recordOperation(allocatorTrial, harness, "reorder", [&](auto &operation) {
-            for (size_t i = 0; i < fixtures.size(); ++i) {
-                const auto &fixture = fixtures[i];
-                const uint32_t lastHeard = 1700000000U - static_cast<uint32_t>(i);
-                if (fixture.id == changed.id) {
-                    NodeFixture updated = fixture;
-                    updated.role = static_cast<uint8_t>(MeshtasticView::router);
-                    store.upsertUser(updated.id, updated.channel, lastHeard, makeUser(updated, "Duplicate Final"), false);
-                } else {
-                    store.upsertUser(fixture.id, fixture.channel, lastHeard, makeUser(fixture), false);
+        uint64_t insertNs = 0;
+        uint64_t updateNs = 0;
+        uint64_t reorderNs = 0;
+        uint64_t filterNs = 0;
+        uint64_t virtualRefreshNs = 0;
+        for (size_t cycle = 0; cycle < measuredCycleCount; ++cycle) {
+            allocatorTrial.cycleCount++;
+            auto orderedCycle = fixtures;
+            std::sort(orderedCycle.begin(), orderedCycle.end(),
+                      [](const NodeFixture &left, const NodeFixture &right) { return left.lastHeard > right.lastHeard; });
+            insertNs += recordOperation(allocatorTrial, harness, "insert", [&](auto &operation) {
+                for (const auto &fixture : orderedCycle) {
+                    store.upsertUser(fixture.id, fixture.channel, fixture.lastHeard, makeUser(fixture), false);
                 }
-            }
-            sync(&operation);
-        });
-
-        const auto *changedRecord = store.find(changed.id);
-        duplicateUpdateOk =
-            duplicateUpdateOk && changedRecord && std::strcmp(changedRecord->user.long_name, "Duplicate Final") == 0;
-        changedNameAndRoleOk = changedNameAndRoleOk && changedRecord &&
-                               std::strcmp(changedRecord->user.long_name, "Duplicate Final") == 0 &&
-                               changedRecord->user.role == meshtastic_Config_DeviceConfig_Role_ROUTER;
-
-        recordOperation(allocatorTrial, harness, "scroll", [&](auto &) {
-            list->scrollTo(changed.id, LV_ANIM_OFF);
-            harness.pump();
-        });
-        const uint64_t virtualRefreshNs =
-            recordOperation(allocatorTrial, harness, "presentation_resync", [&](auto &operation) { sync(&operation); });
-        presentationOk = presentationOk && hasPresentedNode(container, changed.id, "Duplicate Final");
-        resyncPresentationOk = resyncPresentationOk && index.ids().size() == options.nodes;
-
-        NodeFixture extra{0xb0000000U + static_cast<uint32_t>(iteration),
-                          "CAP1",
-                          "Cap Purge Probe",
-                          1699999999U,
-                          static_cast<uint8_t>(MeshtasticView::client),
-                          true,
-                          false,
-                          0,
-                          false,
-                          false};
-        recordOperation(allocatorTrial, harness, "purge", [&](auto &operation) {
-            const NodeId purge = store.selectPurgeCandidate(extra.id, 0, 1700000000U);
-            capPurgeOk = capPurgeOk && purge != 0;
-            if (purge != 0) {
-                store.remove(purge);
-                store.upsertUser(extra.id, extra.channel, extra.lastHeard, makeUser(extra), false);
                 sync(&operation);
+            });
+
+            updateNs += recordOperation(allocatorTrial, harness, "update", [&](auto &operation) {
+                for (size_t i = 0; i < fixtures.size(); ++i) {
+                    const auto &fixture = fixtures[i];
+                    NodeFixture updated = fixture;
+                    updated.role = static_cast<uint8_t>((fixture.role + 1) % 7);
+                    store.upsertUser(updated.id, updated.channel, updated.lastHeard,
+                                     makeUser(updated, "Updated Node " + std::to_string(cycle) + "-" + std::to_string(i)), false);
+                }
+                const auto &changed = fixtures.front();
+                NodeFixture duplicate = changed;
+                duplicate.shortName = "DUP1";
+                duplicate.longName = "Duplicate First";
+                duplicate.role = static_cast<uint8_t>(MeshtasticView::client);
+                duplicate.hasKey = true;
+                duplicate.unmessagable = false;
+                store.upsertUser(duplicate.id, duplicate.channel, duplicate.lastHeard, makeUser(duplicate), false);
+                duplicate.shortName = "DUP2";
+                duplicate.longName = "Duplicate Final";
+                duplicate.role = static_cast<uint8_t>(MeshtasticView::router);
+                store.upsertUser(duplicate.id, duplicate.channel, duplicate.lastHeard, makeUser(duplicate), false);
+                sync(&operation);
+            });
+
+            applyMixedState(store, fixtures);
+            const auto &changed = fixtures.front();
+            if (fixtures.size() > 1) {
+                const auto &offscreen = fixtures.back();
+                recordOperation(allocatorTrial, harness, "rebind", [&](auto &operation) {
+                    store.upsertUser(offscreen.id, offscreen.channel, offscreen.lastHeard,
+                                     makeUser(offscreen, "Offscreen Updated"), false);
+                    sync(&operation);
+                });
+                const auto *offscreenRecord = store.find(offscreen.id);
+                offscreenUpdateOk = offscreenUpdateOk && offscreenRecord &&
+                                    std::strcmp(offscreenRecord->user.long_name, "Offscreen Updated") == 0;
+            } else {
+                recordOperation(allocatorTrial, harness, "rebind", [&](auto &operation) { sync(&operation); });
             }
-        });
+
+            filterNs += recordOperation(allocatorTrial, harness, "filter", [&](auto &operation) {
+                filter.position = true;
+                sync(&operation);
+                filter.position = false;
+                sync(&operation);
+            });
+
+            std::mt19937 orderRandom(options.seed ^ static_cast<uint32_t>((iteration + 1) * (cycle + 1)));
+            std::shuffle(fixtures.begin(), fixtures.end(), orderRandom);
+            reorderNs += recordOperation(allocatorTrial, harness, "reorder", [&](auto &operation) {
+                for (size_t i = 0; i < fixtures.size(); ++i) {
+                    const auto &fixture = fixtures[i];
+                    const uint32_t lastHeard = 1700000000U - static_cast<uint32_t>(i + cycle * fixtures.size());
+                    if (fixture.id == changed.id) {
+                        NodeFixture updated = fixture;
+                        updated.role = static_cast<uint8_t>(MeshtasticView::router);
+                        store.upsertUser(updated.id, updated.channel, lastHeard, makeUser(updated, "Duplicate Final"), false);
+                    } else {
+                        store.upsertUser(fixture.id, fixture.channel, lastHeard, makeUser(fixture), false);
+                    }
+                }
+                sync(&operation);
+            });
+
+            const auto *changedRecord = store.find(changed.id);
+            duplicateUpdateOk =
+                duplicateUpdateOk && changedRecord && std::strcmp(changedRecord->user.long_name, "Duplicate Final") == 0;
+            changedNameAndRoleOk = changedNameAndRoleOk && changedRecord &&
+                                   std::strcmp(changedRecord->user.long_name, "Duplicate Final") == 0 &&
+                                   changedRecord->user.role == meshtastic_Config_DeviceConfig_Role_ROUTER;
+
+            recordOperation(allocatorTrial, harness, "scroll", [&](auto &) {
+                list->scrollTo(changed.id, LV_ANIM_OFF);
+                harness.pump();
+            });
+            virtualRefreshNs +=
+                recordOperation(allocatorTrial, harness, "presentation_resync", [&](auto &operation) { sync(&operation); });
+            presentationOk = presentationOk && hasPresentedNode(container, changed.id, "Duplicate Final");
+            resyncPresentationOk = resyncPresentationOk && index.ids().size() == options.nodes;
+
+            NodeFixture extra{0xb0000000U + static_cast<uint32_t>(iteration * measuredCycleCount + cycle),
+                              "CAP1",
+                              "Cap Purge Probe",
+                              1699999999U,
+                              static_cast<uint8_t>(MeshtasticView::client),
+                              true,
+                              false,
+                              0,
+                              false,
+                              false};
+            recordOperation(allocatorTrial, harness, "purge", [&](auto &operation) {
+                const NodeId purge = store.selectPurgeCandidate(extra.id, 0, 1700000000U);
+                capPurgeOk = capPurgeOk && purge != 0;
+                if (purge != 0) {
+                    store.remove(purge);
+                    store.upsertUser(extra.id, extra.channel, extra.lastHeard, makeUser(extra), false);
+                    auto purgedFixture =
+                        std::find_if(fixtures.begin(), fixtures.end(), [&](const auto &fixture) { return fixture.id == purge; });
+                    if (purgedFixture != fixtures.end()) {
+                        *purgedFixture = extra;
+                    }
+                    sync(&operation);
+                }
+            });
+        }
         nodeCountOk = nodeCountOk && store.size() == options.nodes && index.ids().size() == options.nodes;
         allocatorTrial.after = captureAllocatorSnapshot();
         allocatorTrial.delta = allocatorDelta(allocatorTrial.before, allocatorTrial.after);
         observeAllocatorSnapshot(allocatorTrial.peak, allocatorTrial.after);
+        captureTerminalAfter(allocatorTrial, harness, index.ids().size(), store.size(), index.ids().size());
         if (!allocatorTrial.warmup) {
-            allocatorChurnBoundedOk = allocatorChurnBoundedOk &&
-                                      retainedAllocatorBlockCountIsBounded(allocatorTrial.before, allocatorTrial.after) &&
-                                      trialOperationsAreStable(allocatorTrial);
+            allocatorChurnBoundedOk =
+                allocatorChurnBoundedOk && trialTerminalIsStable(allocatorTrial) && trialOperationsAreStable(allocatorTrial);
         }
         allocatorTelemetry.trials.push_back(std::move(allocatorTrial));
 
@@ -764,6 +817,7 @@ NodeListBenchmarkReport runNodeListBenchmark(const NodeListBenchmarkOptions &opt
     bool capPurgeOk = true;
     bool resyncPresentationOk = true;
     bool offscreenUpdateOk = true;
+    bool allocatorChurnBoundedOk = true;
 
     const size_t iterations = options.warmup + options.trials;
     NodeListCandidateAllocatorTelemetry allocatorTelemetry;
@@ -785,88 +839,137 @@ NodeListBenchmarkReport runNodeListBenchmark(const NodeListBenchmarkOptions &opt
         std::sort(ordered.begin(), ordered.end(),
                   [](const NodeFixture &left, const NodeFixture &right) { return left.lastHeard > right.lastHeard; });
         insertFixtures(harness, ordered);
+        harness.showNodesScreen();
+        harness.pump(50);
+        applyMixedState(harness, fixtures);
         allocatorTrial.before = captureAllocatorSnapshot();
         allocatorTrial.peak = allocatorTrial.before;
+        captureTerminalBefore(allocatorTrial, harness, harness.legacyRetainedNodeCount(), harness.store().size(),
+                              harness.renderedNodeCount());
 
-        const uint64_t insertNs = recordOperation(allocatorTrial, harness, "insert", [&](auto &) {
-            for (const auto &fixture : ordered) {
-                harness.updateNodeFixture(fixture.id, fixture.shortName.c_str(), fixture.longName.c_str(), fixture.role,
-                                          fixture.hasKey, fixture.unmessagable, fixture.channel);
-            }
-            harness.pump();
-        });
-
-        const uint64_t updateNs = recordOperation(allocatorTrial, harness, "update", [&](auto &) {
-            for (size_t i = 0; i < fixtures.size(); ++i) {
-                const auto &fixture = fixtures[i];
-                const std::string longName = "Updated Node " + std::to_string(i);
-                harness.updateNodeFixture(fixture.id, fixture.shortName.c_str(), longName.c_str(),
-                                          static_cast<uint8_t>((fixture.role + 1) % 7), fixture.hasKey, fixture.unmessagable,
-                                          fixture.channel);
-            }
-            const auto &changed = fixtures.front();
-            harness.updateNodeFixture(changed.id, "DUP1", "Duplicate First", static_cast<uint8_t>(MeshtasticView::client), true,
-                                      false, changed.channel);
-            harness.updateNodeFixture(changed.id, "DUP2", "Duplicate Final", static_cast<uint8_t>(MeshtasticView::router), true,
-                                      false, changed.channel);
-            harness.pump();
-        });
-
-        applyMixedState(harness, fixtures);
-        const auto &changed = fixtures.front();
-
-        if (fixtures.size() > 1) {
-            const auto &offscreen = fixtures.back();
-            harness.updateNodeFixture(offscreen.id, "OFFS", "Offscreen Updated", offscreen.role, offscreen.hasKey,
-                                      offscreen.unmessagable, offscreen.channel);
-            recordOperation(allocatorTrial, harness, "rebind", [&](auto &) { harness.pump(); });
-            const char *offscreenName = harness.nodeLongName(offscreen.id);
-            offscreenUpdateOk = offscreenUpdateOk && offscreenName && std::strcmp(offscreenName, "Offscreen Updated") == 0;
-        } else {
-            recordOperation(allocatorTrial, harness, "rebind", [&](auto &) { harness.pump(); });
-        }
-
-        const char *changedName = harness.nodeLongName(changed.id);
-        duplicateUpdateOk = duplicateUpdateOk && changedName && std::strcmp(changedName, "Duplicate Final") == 0;
-        changedNameAndRoleOk = changedNameAndRoleOk && changedName && std::strcmp(changedName, "Duplicate Final") == 0 &&
-                               harness.nodeRole(changed.id) == static_cast<uint8_t>(MeshtasticView::router);
-
-        const uint64_t filterNs = recordOperation(allocatorTrial, harness, "filter", [&](auto &) { harness.scanNodeFilters(); });
-
-        std::mt19937 orderRandom(options.seed ^ static_cast<uint32_t>(iteration + 1));
-        std::shuffle(fixtures.begin(), fixtures.end(), orderRandom);
-        const uint64_t reorderNs = recordOperation(allocatorTrial, harness, "reorder", [&](auto &) {
-            for (const auto &fixture : fixtures) {
-                harness.updateLastHeardFixture(fixture.id);
+        uint64_t insertNs = 0;
+        uint64_t updateNs = 0;
+        uint64_t reorderNs = 0;
+        uint64_t filterNs = 0;
+        for (size_t cycle = 0; cycle < measuredCycleCount; ++cycle) {
+            allocatorTrial.cycleCount++;
+            auto orderedCycle = fixtures;
+            std::sort(orderedCycle.begin(), orderedCycle.end(),
+                      [](const NodeFixture &left, const NodeFixture &right) { return left.lastHeard > right.lastHeard; });
+            insertNs += recordOperation(allocatorTrial, harness, "insert", [&](auto &) {
+                for (const auto &fixture : orderedCycle) {
+                    harness.updateNodeFixture(fixture.id, fixture.shortName.c_str(), fixture.longName.c_str(), fixture.role,
+                                              fixture.hasKey, fixture.unmessagable, fixture.channel);
+                }
                 harness.pump();
+            });
+
+            updateNs += recordOperation(allocatorTrial, harness, "update", [&](auto &) {
+                for (size_t i = 0; i < fixtures.size(); ++i) {
+                    auto &fixture = fixtures[i];
+                    const std::string longName = "Updated Node " + std::to_string(cycle) + "-" + std::to_string(i);
+                    fixture.longName = longName;
+                    fixture.role = static_cast<uint8_t>((fixture.role + 1) % 7);
+                    harness.updateNodeFixture(fixture.id, fixture.shortName.c_str(), fixture.longName.c_str(), fixture.role,
+                                              fixture.hasKey, fixture.unmessagable, fixture.channel);
+                }
+                auto &changed = fixtures.front();
+                changed.shortName = "DUP2";
+                changed.longName = "Duplicate Final";
+                changed.role = static_cast<uint8_t>(MeshtasticView::router);
+                changed.hasKey = true;
+                changed.unmessagable = false;
+                harness.updateNodeFixture(changed.id, "DUP1", "Duplicate First", static_cast<uint8_t>(MeshtasticView::client),
+                                          true, false, changed.channel);
+                harness.updateNodeFixture(changed.id, changed.shortName.c_str(), changed.longName.c_str(), changed.role,
+                                          changed.hasKey, changed.unmessagable, changed.channel);
+                harness.pump();
+            });
+
+            const auto &changed = fixtures.front();
+            if (fixtures.size() > 1) {
+                auto &offscreen = fixtures.back();
+                recordOperation(allocatorTrial, harness, "rebind", [&](auto &) {
+                    harness.updateNodeFixture(offscreen.id, "OFFS", "Offscreen Updated", offscreen.role, offscreen.hasKey,
+                                              offscreen.unmessagable, offscreen.channel);
+                    harness.pump();
+                });
+                offscreen.shortName = "OFFS";
+                offscreen.longName = "Offscreen Updated";
+                const char *offscreenName = harness.nodeLongName(offscreen.id);
+                offscreenUpdateOk = offscreenUpdateOk && offscreenName && std::strcmp(offscreenName, "Offscreen Updated") == 0;
+                const auto offscreenSnapshot = harness.legacyRowSnapshot(offscreen.id);
+                offscreenUpdateOk = offscreenUpdateOk && offscreenSnapshot.longName == "Offscreen Updated";
+            } else {
+                recordOperation(allocatorTrial, harness, "rebind", [&](auto &) { harness.pump(); });
             }
-        });
 
-        recordOperation(allocatorTrial, harness, "scroll", [&](auto &) {
-            lv_obj_scroll_to_y(harness.legacyNodeListRootForTesting(), 120, LV_ANIM_OFF);
-            harness.pump();
-        });
+            const char *changedName = harness.nodeLongName(changed.id);
+            duplicateUpdateOk = duplicateUpdateOk && changedName && std::strcmp(changedName, "Duplicate Final") == 0;
+            changedNameAndRoleOk = changedNameAndRoleOk && changedName && std::strcmp(changedName, "Duplicate Final") == 0 &&
+                                   harness.nodeRole(changed.id) == static_cast<uint8_t>(MeshtasticView::router);
 
-        recordOperation(allocatorTrial, harness, "presentation_resync",
-                        [&](auto &) { harness.toggleResyncPresentationFixture(); });
-        resyncPresentationOk = resyncPresentationOk && harness.legacyRetainedNodeCount() == options.nodes;
+            filterNs += recordOperation(allocatorTrial, harness, "filter", [&](auto &) { harness.scanNodeFilters(); });
 
-        recordOperation(allocatorTrial, harness, "purge", [&](auto &) {
-            const uint32_t extraId = 0xb0000000U + static_cast<uint32_t>(iteration);
-            const uint32_t purgeId = harness.nodePurgeCandidate(extraId);
-            capPurgeOk = capPurgeOk && purgeId != 0;
-            if (purgeId != 0 && options.nodes < 250) {
-                harness.removeLegacyNodePanel(purgeId);
-            }
-            harness.addNodeFixture(extraId, "CAP1", "Cap Purge Probe", 1699999999U, static_cast<uint8_t>(MeshtasticView::client),
-                                   true, false, 0);
-            harness.pump();
-            capPurgeOk = capPurgeOk && harness.nodeLongName(extraId) != nullptr && harness.nodeLongName(purgeId) == nullptr;
-        });
-        nodeCountOk = nodeCountOk && harness.legacyRetainedNodeCount() == options.nodes;
+            std::mt19937 orderRandom(options.seed ^ static_cast<uint32_t>((iteration + 1) * (cycle + 1)));
+            std::shuffle(fixtures.begin(), fixtures.end(), orderRandom);
+            reorderNs += recordOperation(allocatorTrial, harness, "reorder", [&](auto &) {
+                for (const auto &fixture : fixtures) {
+                    harness.updateLastHeardFixture(fixture.id);
+                    harness.pump();
+                }
+            });
+
+            recordOperation(allocatorTrial, harness, "scroll", [&](auto &) {
+                lv_obj_scroll_to_y(harness.legacyNodeListRootForTesting(), 120, LV_ANIM_OFF);
+                harness.pump();
+            });
+
+            recordOperation(allocatorTrial, harness, "presentation_resync",
+                            [&](auto &) { harness.toggleResyncPresentationFixture(); });
+            resyncPresentationOk = resyncPresentationOk && harness.legacyRetainedNodeCount() == options.nodes;
+
+            NodeFixture extra{0xb0000000U + static_cast<uint32_t>(iteration * measuredCycleCount + cycle),
+                              "CAP1",
+                              "Cap Purge Probe",
+                              1699999999U,
+                              static_cast<uint8_t>(MeshtasticView::client),
+                              true,
+                              false,
+                              0,
+                              false,
+                              false};
+            recordOperation(allocatorTrial, harness, "purge", [&](auto &) {
+                const uint32_t purgeId = harness.nodePurgeCandidate(extra.id);
+                capPurgeOk = capPurgeOk && purgeId != 0;
+                if (purgeId != 0) {
+                    if (options.nodes < 250) {
+                        harness.purgeLegacyNode(extra.id);
+                    }
+                    harness.addNodeFixture(extra.id, extra.shortName.c_str(), extra.longName.c_str(), extra.lastHeard, extra.role,
+                                           extra.hasKey, extra.unmessagable, extra.channel);
+                    harness.pump();
+                    auto purgedFixture = std::find_if(fixtures.begin(), fixtures.end(),
+                                                      [&](const auto &fixture) { return fixture.id == purgeId; });
+                    if (purgedFixture != fixtures.end()) {
+                        *purgedFixture = extra;
+                    }
+                    capPurgeOk =
+                        capPurgeOk && harness.nodeLongName(extra.id) != nullptr && harness.nodeLongName(purgeId) == nullptr;
+                }
+            });
+        }
+        nodeCountOk = nodeCountOk && harness.legacyRetainedNodeCount() == options.nodes &&
+                      harness.store().size() == options.nodes && harness.renderedNodeCount() == options.nodes;
         allocatorTrial.after = captureAllocatorSnapshot();
         allocatorTrial.delta = allocatorDelta(allocatorTrial.before, allocatorTrial.after);
         observeAllocatorSnapshot(allocatorTrial.peak, allocatorTrial.after);
+        captureTerminalAfter(allocatorTrial, harness, harness.legacyRetainedNodeCount(), harness.store().size(),
+                             harness.renderedNodeCount());
+        if (!allocatorTrial.warmup) {
+            allocatorChurnBoundedOk =
+                allocatorChurnBoundedOk && trialTerminalIsStable(allocatorTrial) && trialOperationsAreStable(allocatorTrial);
+        }
         allocatorTelemetry.trials.push_back(std::move(allocatorTrial));
 
         if (iteration >= options.warmup) {
@@ -906,7 +1009,7 @@ NodeListBenchmarkReport runNodeListBenchmark(const NodeListBenchmarkOptions &opt
     report.correctness.all = report.correctness.ready && report.correctness.requestedNodeCount &&
                              report.correctness.duplicateUpdate && report.correctness.changedNameAndRole &&
                              report.correctness.capPurge && report.correctness.resyncPresentationPreservedNodes &&
-                             report.correctness.offscreenUpdate && report.memory.integrityOk;
+                             report.correctness.offscreenUpdate && allocatorChurnBoundedOk && report.memory.integrityOk;
     return report;
 }
 
@@ -956,7 +1059,7 @@ bool writeNodeListBenchmarkJson(const NodeListBenchmarkReport &report, const std
         for (size_t i = 0; i < telemetry.trials.size(); ++i) {
             const auto &trial = telemetry.trials[i];
             output << "    {\"iteration\": " << trial.iteration << ", \"warmup\": " << (trial.warmup ? "true" : "false")
-                   << ", \"before\": ";
+                   << ", \"cycle_count\": " << trial.cycleCount << ", \"before\": ";
             writeAllocatorSnapshot(output, trial.before);
             output << ", \"sync_snapshots\": [";
             for (size_t syncIndex = 0; syncIndex < trial.syncSnapshots.size(); ++syncIndex) {
@@ -994,6 +1097,21 @@ bool writeNodeListBenchmarkJson(const NodeListBenchmarkReport &report, const std
             writeAllocatorDelta(output, trial.delta);
             output << ", \"peak\": ";
             writeAllocatorSnapshot(output, trial.peak);
+            output << ", \"terminal\": {\"objects_before\": " << trial.objectsBefore
+                   << ", \"objects_after\": " << trial.objectsAfter
+                   << ", \"node_list_objects_before\": " << trial.nodeListObjectsBefore
+                   << ", \"node_list_objects_after\": " << trial.nodeListObjectsAfter
+                   << ", \"retained_nodes_before\": " << trial.retainedNodesBefore
+                   << ", \"retained_nodes_after\": " << trial.retainedNodesAfter
+                   << ", \"node_store_size_before\": " << trial.nodeStoreSizeBefore
+                   << ", \"node_store_size_after\": " << trial.nodeStoreSizeAfter
+                   << ", \"node_count_before\": " << trial.nodeCountBefore << ", \"node_count_after\": " << trial.nodeCountAfter
+                   << ", \"object_count_stable\": " << (trial.objectCountStable ? "true" : "false")
+                   << ", \"retained_nodes_stable\": " << (trial.retainedNodesStable ? "true" : "false")
+                   << ", \"node_store_size_stable\": " << (trial.nodeStoreSizeStable ? "true" : "false")
+                   << ", \"node_count_stable\": " << (trial.nodeCountStable ? "true" : "false")
+                   << ", \"allocator_used_count_bounded\": " << (trial.allocatorUsedCountBounded ? "true" : "false")
+                   << ", \"all\": " << (trial.terminalStable ? "true" : "false") << '}';
             output << '}' << (i + 1 == telemetry.trials.size() ? "\n" : ",\n");
         }
         output << "  ]}";

@@ -387,6 +387,11 @@ uint32_t MuiTestHarness::nodePurgeCandidate(uint32_t incoming) const
     return view->nodePurgeCandidateForTesting(incoming);
 }
 
+void MuiTestHarness::purgeLegacyNode(uint32_t incoming)
+{
+    view->purgeLegacyNodeForTesting(incoming);
+}
+
 void MuiTestHarness::corruptLegacyNodePanel(uint32_t nodeId)
 {
     view->corruptLegacyNodePanelForTesting(nodeId);
