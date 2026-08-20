@@ -103,7 +103,6 @@ void setRoleImage(const NodeRecord &record, lv_obj_t *img)
         lv_image_set_src(img, record.hasUser ? &img_node_client_image : &img_circle_question_image);
         break;
     }
-    lv_obj_set_style_image_recolor(img, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_image_recolor_opa(img, fgColor ? 0 : 255, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_color(img, lv_color_hex(bgColor), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_color(img, lv_color_hex(bgColor), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -226,7 +225,6 @@ void VirtualNodeList::createRowPool()
         lv_obj_clear_flag(row.img, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_style_align(row.img, LV_ALIGN_TOP_LEFT, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_radius(row.img, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_image_recolor(row.img, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_image_recolor_opa(row.img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_bg_color(row.img, lv_color_hex(0x5d9388), LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_bg_opa(row.img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -411,13 +409,10 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     lv_obj_set_user_data(row.btn, reinterpret_cast<void *>(static_cast<uintptr_t>(record.id)));
 
     setRoleImage(record, row.img);
-    if (!record.unmessagable) {
-        if (!record.hasKey) {
-            lv_obj_set_style_border_color(row.img, lv_color_hex(0xff5555), LV_PART_MAIN | LV_STATE_DEFAULT);
-        } else {
-            lv_obj_set_style_border_color(row.img, lv_obj_get_style_bg_color(row.img, LV_PART_MAIN),
-                                          LV_PART_MAIN | LV_STATE_DEFAULT);
-        }
+    if (!record.hasKey) {
+        lv_obj_set_style_border_color(row.img, lv_color_hex(0xff5555), LV_PART_MAIN | LV_STATE_DEFAULT);
+    } else if (!record.unmessagable) {
+        lv_obj_set_style_border_color(row.img, lv_obj_get_style_bg_color(row.img, LV_PART_MAIN), LV_PART_MAIN | LV_STATE_DEFAULT);
     }
 
     formatShortName(record, renderContext, row.shortText, sizeof(row.shortText));

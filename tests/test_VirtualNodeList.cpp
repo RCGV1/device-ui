@@ -400,16 +400,26 @@ TEST_CASE("VirtualNodeList matches legacy icon style and short-name fallback aft
     constexpr NodeId noKeyRouter = 0x11112222;
     constexpr NodeId blocked = 0x22223333;
     constexpr NodeId blankShort = 0x1234abcd;
+    constexpr NodeId blockedNoKey = 0x33334444;
+    constexpr NodeId darkNormal = 0x00000001;
+    constexpr NodeId brightNormal = 0x00fefefe;
+    constexpr NodeId nonPrintableShort = 0x4444beef;
 
     legacy.addNodeFixture(noKeyRouter, "RTR1", "Router Without Key", 1699999900U, MeshtasticView::router, false, false, 0);
     legacy.addNodeFixture(blocked, "BLKD", "Blocked Node", 1699999890U, MeshtasticView::client, true, true, 0);
     legacy.addNodeFixture(blankShort, "", "Blank Short", 1699999880U, MeshtasticView::client, true, false, 0);
+    legacy.addNodeFixture(blockedNoKey, "BNK0", "Blocked Node Without Key", 1699999870U, MeshtasticView::client, false, true, 0);
+    legacy.addNodeFixture(darkNormal, "DRK1", "Dark Normal Node", 1699999860U, MeshtasticView::client, true, false, 0);
+    legacy.addNodeFixture(brightNormal, "BRT1", "Bright Normal Node", 1699999850U, MeshtasticView::client, true, false, 0);
+    legacy.addNodeFixture(nonPrintableShort, "\x01\x02\x03\x04", "Non Printable Short", 1699999840U, MeshtasticView::client, true,
+                          false, 0);
     legacy.pump();
 
     const MuiRowSnapshot legacyRouter = legacy.legacyRowSnapshot(noKeyRouter);
     const MuiRowSnapshot virtualRouter = syncVirtualSnapshotFromLegacy(legacy, noKeyRouter);
     CHECK(virtualRouter.imageBg == legacyRouter.imageBg);
     CHECK(virtualRouter.imageBorder == legacyRouter.imageBorder);
+    CHECK(virtualRouter.imageRecolor == legacyRouter.imageRecolor);
     CHECK(virtualRouter.imageRecolorOpa == legacyRouter.imageRecolorOpa);
 
     const MuiRowSnapshot legacyBlocked = legacy.legacyRowSnapshot(blocked);
@@ -419,7 +429,30 @@ TEST_CASE("VirtualNodeList matches legacy icon style and short-name fallback aft
     CHECK(virtualBlocked.imageRecolor == legacyBlocked.imageRecolor);
     CHECK(virtualBlocked.imageRecolorOpa == legacyBlocked.imageRecolorOpa);
 
+    const MuiRowSnapshot legacyBlockedNoKey = legacy.legacyRowSnapshot(blockedNoKey);
+    const MuiRowSnapshot virtualBlockedNoKey = syncVirtualSnapshotFromLegacy(legacy, blockedNoKey);
+    CHECK(virtualBlockedNoKey.imageBg == legacyBlockedNoKey.imageBg);
+    CHECK(virtualBlockedNoKey.imageBorder == legacyBlockedNoKey.imageBorder);
+    CHECK(virtualBlockedNoKey.imageRecolor == legacyBlockedNoKey.imageRecolor);
+    CHECK(virtualBlockedNoKey.imageRecolorOpa == legacyBlockedNoKey.imageRecolorOpa);
+
+    const MuiRowSnapshot legacyDarkNormal = legacy.legacyRowSnapshot(darkNormal);
+    const MuiRowSnapshot virtualDarkNormal = syncVirtualSnapshotFromLegacy(legacy, darkNormal);
+    CHECK(virtualDarkNormal.imageBg == legacyDarkNormal.imageBg);
+    CHECK(virtualDarkNormal.imageBorder == legacyDarkNormal.imageBorder);
+    CHECK(virtualDarkNormal.imageRecolor == legacyDarkNormal.imageRecolor);
+    CHECK(virtualDarkNormal.imageRecolorOpa == legacyDarkNormal.imageRecolorOpa);
+
+    const MuiRowSnapshot legacyBrightNormal = legacy.legacyRowSnapshot(brightNormal);
+    const MuiRowSnapshot virtualBrightNormal = syncVirtualSnapshotFromLegacy(legacy, brightNormal);
+    CHECK(virtualBrightNormal.imageBg == legacyBrightNormal.imageBg);
+    CHECK(virtualBrightNormal.imageBorder == legacyBrightNormal.imageBorder);
+    CHECK(virtualBrightNormal.imageRecolor == legacyBrightNormal.imageRecolor);
+    CHECK(virtualBrightNormal.imageRecolorOpa == legacyBrightNormal.imageRecolorOpa);
+
     CHECK(syncVirtualSnapshotFromLegacy(legacy, blankShort).shortName == legacy.legacyRowSnapshot(blankShort).shortName);
+    CHECK(syncVirtualSnapshotFromLegacy(legacy, nonPrintableShort).shortName ==
+          legacy.legacyRowSnapshot(nonPrintableShort).shortName);
 }
 
 TEST_CASE("VirtualNodeList expansion and stable selection")

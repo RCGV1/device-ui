@@ -142,3 +142,47 @@ Addressed the Important review findings with event-driven legacy-vs-virtual pari
 - `VirtualNodeList` remains test/benchmark/video-only; no normal `TFTView` integration or clickable default behavior was added.
 - Static row-owned buffers remain in `ReusableRow`; the short-name buffer was widened to hold the legacy distance suffix without per-bind allocation.
 - Untracked build directories and `.codex/task3-venv` were preserved and not staged.
+
+## Review Fix Round 2
+
+Addressed the remaining Important review findings only.
+
+### Changes
+
+- Matched legacy missing-key border order for unmessagable nodes: virtual now applies the red public-key-missing border after `setRoleImage()` for every no-key record, including unmessagable records.
+- Removed virtual’s explicit normal image recolor color assignment. Legacy normal `setNodeImage()` only sets recolor opacity, so virtual no longer forces normal recolor to white in `setRoleImage()` or row-pool construction.
+- Extended the existing event-driven legacy-vs-virtual row snapshot test to compare:
+  - unmessagable + no-key background, red border, recolor color, and recolor opacity;
+  - normal dark/bright node-color cases including recolor color and opacity;
+  - router no-key recolor color and opacity;
+  - non-printable short-name fallback, in addition to blank short-name fallback.
+
+### RED Evidence
+
+- Command:
+  - `PATH="/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task3-venv/bin:$PATH" cmake --build build-mui-node-list-headless --target tests -j 8 && ./build-mui-node-list-headless/bin/tests "--test-case=*VirtualNodeList*"`
+- Expected failures after adding the round-2 parity assertions:
+  - `virtualRouter.imageRecolor == legacyRouter.imageRecolor` failed: `4294967295 == 4278190080`.
+  - `virtualBlockedNoKey.imageBorder == legacyBlockedNoKey.imageBorder` failed: `4283327588 == 4294923605`.
+  - `virtualDarkNormal.imageRecolor == legacyDarkNormal.imageRecolor` failed: `4294967295 == 4278190080`.
+  - `virtualBrightNormal.imageRecolor == legacyBrightNormal.imageRecolor` failed: `4294967295 == 4278190080`.
+
+### GREEN Evidence
+
+- Focused virtual list:
+  - `PATH="/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task3-venv/bin:$PATH" cmake --build build-mui-node-list-headless --target tests -j 8 && ./build-mui-node-list-headless/bin/tests "--test-case=*VirtualNodeList*"`
+  - 10 test cases passed, 0 failed, 92 assertions passed.
+- Full CTest:
+  - `PATH="/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task3-venv/bin:$PATH" ctest --test-dir build-mui-node-list-headless --output-on-failure`
+  - 9/9 tests passed.
+  - Included `VirtualNodeListAllocator25`, `VirtualNodeListAllocator100`, and `VirtualNodeListAllocator250`.
+- Formatting/diff hygiene:
+  - `trunk fmt source/graphics/view/TFT/VirtualNodeList.cpp tests/test_VirtualNodeList.cpp`
+  - Checked 2 files, no issues after formatting.
+  - Re-ran focused virtual list, full CTest, and `git diff --check` after formatting; all passed.
+
+### Scope Notes
+
+- No integration/default/filter/order changes were made.
+- Static row-owned buffers were preserved.
+- Untracked build directories and `.codex/task3-venv` were preserved and not staged.
