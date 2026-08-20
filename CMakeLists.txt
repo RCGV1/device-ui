@@ -17,6 +17,7 @@ option(ENABLE_DOCTESTS "Include tests in the library. Setting this to OFF will r
                         Tests in tests/*.cpp will still be enabled." ${MAIN_PROJECT})
 option(ENABLE_DEBUG_LOG "Enable debug log" OFF)
 option(ENABLE_MUI_HEADLESS_TESTS "Use deterministic headless display and input support for MUI integration tests" OFF)
+option(ENABLE_MUI_X11_SIMULATOR "Build the test-only interactive X11 MUI simulator" OFF)
 option(MUI_NODE_LIST_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer for native node-list tests" OFF)
 
 if(ENABLE_MUI_HEADLESS_TESTS AND NOT ENABLE_DOCTESTS)
@@ -54,12 +55,18 @@ if(ENABLE_MUI_HEADLESS_TESTS)
     add_compile_definitions(RAM_SIZE=16384)
     set(CONFIG_LV_BUILD_DEMOS OFF CACHE BOOL "Build LVGL demos" FORCE)
     set(CONFIG_LV_BUILD_EXAMPLES OFF CACHE BOOL "Build LVGL examples" FORCE)
+elseif(ENABLE_MUI_X11_SIMULATOR)
+    add_compile_definitions(USE_X11=1)
+    add_compile_definitions(HAS_TFT=1)
+    add_compile_definitions(RAM_SIZE=16384)
+    set(CONFIG_LV_BUILD_DEMOS OFF CACHE BOOL "Build LVGL demos" FORCE)
+    set(CONFIG_LV_BUILD_EXAMPLES OFF CACHE BOOL "Build LVGL examples" FORCE)
 else()
     add_compile_definitions(USE_X11=1)
 endif()
 
 include(FetchContent)
-if(ENABLE_MUI_HEADLESS_TESTS)
+if(ENABLE_MUI_HEADLESS_TESTS OR (ENABLE_MUI_X11_SIMULATOR AND APPLE))
     message(STATUS "Fetching headless Portduino support ...")
     FetchContent_Declare(
         Portduino
@@ -94,14 +101,14 @@ if(ENABLE_MUI_HEADLESS_TESTS)
 else()
     include(Portduino)
 endif()
-if(ENABLE_MUI_HEADLESS_TESTS AND APPLE)
+if((ENABLE_MUI_HEADLESS_TESTS OR ENABLE_MUI_X11_SIMULATOR) AND APPLE)
     find_path(ARGP_INCLUDE_DIR argp.h REQUIRED PATHS /opt/homebrew/include /usr/local/include)
     list(APPEND PORTDUINO_INCLUDE_DIRS ${ARGP_INCLUDE_DIR})
     foreach(PORTDUINO_INCLUDE_DIR IN LISTS PORTDUINO_INCLUDE_DIRS)
         target_compile_options(Portduino PRIVATE "-idirafter${PORTDUINO_INCLUDE_DIR}")
     endforeach()
 endif()
-if(ENABLE_MUI_HEADLESS_TESTS)
+if(ENABLE_MUI_HEADLESS_TESTS OR (ENABLE_MUI_X11_SIMULATOR AND APPLE))
     add_library(LovyanGFX INTERFACE)
 else()
     include(LovyanGFX)
@@ -114,7 +121,7 @@ include(Doctest)
 
 find_package(CURL REQUIRED)
 
-if(ENABLE_MUI_HEADLESS_TESTS)
+if(ENABLE_MUI_HEADLESS_TESTS OR (ENABLE_MUI_X11_SIMULATOR AND APPLE))
     file(GLOB_RECURSE sources source/* portduino/* locale/* generated/${GENERATED_VIEW}/*)
 else()
     file(GLOB_RECURSE sources source/* generated/* portduino/* locale/* generated/${GENERATED_VIEW}/*)
@@ -125,6 +132,13 @@ if(ENABLE_MUI_HEADLESS_TESTS)
     list(APPEND sources ${CMAKE_CURRENT_SOURCE_DIR}/src/mesh-pb-constants.cpp)
     list(FILTER sources EXCLUDE REGEX "source/comms/")
     list(FILTER sources EXCLUDE REGEX "source/graphics/driver/(DisplayDriverFactory|FBDriver|X11Driver)\\.cpp$")
+    list(FILTER sources EXCLUDE REGEX "portduino/Light_PWM\\.cpp$")
+endif()
+
+if(ENABLE_MUI_X11_SIMULATOR AND APPLE)
+    list(APPEND sources ${CMAKE_CURRENT_SOURCE_DIR}/src/mesh-pb-constants.cpp)
+    list(FILTER sources EXCLUDE REGEX "source/comms/")
+    list(FILTER sources EXCLUDE REGEX "source/graphics/driver/(DisplayDriverFactory|FBDriver)\\.cpp$")
     list(FILTER sources EXCLUDE REGEX "portduino/Light_PWM\\.cpp$")
 endif()
 
@@ -223,6 +237,49 @@ if(ENABLE_MUI_HEADLESS_TESTS)
     set_target_properties(node_list_video PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 endif()
 
+if(ENABLE_MUI_X11_SIMULATOR)
+    find_package(X11 REQUIRED)
+    find_package(ZLIB REQUIRED)
+    target_include_directories(lvgl PUBLIC ${X11_INCLUDE_DIR})
+    add_executable(mui_node_list_simulator
+        tools/mui_node_list_simulator.cpp
+        resources/mouse_cursor_icon.c
+        tests/X11MuiSimulator.cpp
+        tests/HeadlessLinuxHardwareI2C.cpp
+        tests/HeadlessPlatform.cpp
+    )
+    target_include_directories(mui_node_list_simulator PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/locale
+        ${CMAKE_CURRENT_SOURCE_DIR}/portduino
+        ${CMAKE_CURRENT_SOURCE_DIR}/generated/${GENERATED_VIEW}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        ${GENERATED_FILES_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR}
+        ${nanopb_SOURCE_DIR}
+    )
+    target_link_libraries(mui_node_list_simulator PRIVATE
+        DeviceUI
+        lvgl::lvgl
+        LovyanGFX
+        Portduino
+        Protobufs
+        PNGdec
+        protobuf-nanopb-static
+        doctest::doctest
+        X11::X11
+        ZLIB::ZLIB
+    )
+    target_compile_definitions(mui_node_list_simulator PRIVATE UNIT_TEST DEVICE_UI_X11_SIMULATOR)
+    if(APPLE)
+        foreach(PORTDUINO_INCLUDE_DIR IN LISTS PORTDUINO_INCLUDE_DIRS)
+            target_compile_options(mui_node_list_simulator PRIVATE "-idirafter${PORTDUINO_INCLUDE_DIR}")
+        endforeach()
+    endif()
+    set_target_properties(mui_node_list_simulator PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+endif()
+
 # Handle Windows Static linking dependencies if applicable
 if(WIN32)
     target_compile_definitions(DeviceUI PRIVATE CURL_STATICLIB)
@@ -230,7 +287,7 @@ if(WIN32)
 endif()
 
 target_compile_options(DeviceUI PUBLIC -Wall -Wno-format -Wfloat-conversion)
-if(ENABLE_MUI_HEADLESS_TESTS AND APPLE)
+if((ENABLE_MUI_HEADLESS_TESTS OR ENABLE_MUI_X11_SIMULATOR) AND APPLE)
     foreach(PORTDUINO_INCLUDE_DIR IN LISTS PORTDUINO_INCLUDE_DIRS)
         target_compile_options(DeviceUI PRIVATE "-idirafter${PORTDUINO_INCLUDE_DIR}")
     endforeach()
@@ -238,7 +295,7 @@ if(ENABLE_MUI_HEADLESS_TESTS AND APPLE)
 endif()
 
 target_include_directories(DeviceUI PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-if(ENABLE_MUI_HEADLESS_TESTS)
+if(ENABLE_MUI_HEADLESS_TESTS OR (ENABLE_MUI_X11_SIMULATOR AND APPLE))
     target_include_directories(DeviceUI PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 endif()
 target_include_directories(DeviceUI PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -301,5 +358,11 @@ if(ENABLE_DOCTESTS)
         add_test(NAME NodeStore COMMAND tests "--test-case=*node store*")
         add_test(NAME VisibleNodeIndex COMMAND tests "--test-case=*visible index*")
         add_test(NAME VirtualNodeList COMMAND tests "--test-case=*VirtualNodeList*")
+    endif()
+    if(ENABLE_MUI_X11_SIMULATOR)
+        add_test(NAME MuiX11SimulatorRejectsVirtualCandidate
+                 COMMAND ${CMAKE_COMMAND}
+                 -DMUI_NODE_LIST_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator>
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/AssertMuiX11SimulatorRejectsVirtualCandidate.cmake)
     endif()
 endif()

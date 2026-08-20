@@ -1,5 +1,5 @@
 message(STATUS "Fetching protobufs ...")
-if(ENABLE_MUI_HEADLESS_TESTS)
+if(ENABLE_MUI_HEADLESS_TESTS OR ENABLE_MUI_X11_SIMULATOR)
     set(PROTOBUF_TAG v2.7.25)
 else()
     set(PROTOBUF_TAG v2.7.8)
