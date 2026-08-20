@@ -60,6 +60,15 @@ class MuiTestHarness
     const char *nodeLongName(uint32_t nodeId) const;
     uint8_t nodeRole(uint32_t nodeId) const;
     const NodeRecord *node(uint32_t nodeId) const;
+    bool nodeIsMessagable(uint32_t nodeId) const;
+    uint8_t nodeChannel(uint32_t nodeId) const;
+    bool nodeHasKey(uint32_t nodeId) const;
+    int8_t nodeHops(uint32_t nodeId) const;
+    const char *nodeDisplayName(uint32_t nodeId) const;
+    const char *nodeShortName(uint32_t nodeId) const;
+    NodePosition nodePosition(uint32_t nodeId) const;
+    uint32_t nodePurgeCandidate(uint32_t incoming) const;
+    void corruptLegacyNodePanel(uint32_t nodeId);
     const NodeStore &store() const;
     const VisibleNodeIndex &visibleIndex() const;
     lv_obj_t *nodeListRootForTesting() const;

@@ -107,6 +107,15 @@ class TFTView_320x240 : public MeshtasticView
     const NodeRecord *nodeRecordForTesting(uint32_t nodeNum) const { return nodeRecord(nodeNum); }
     const NodeStore &nodeStoreForTesting() const { return nodeStore; }
     const VisibleNodeIndex &visibleNodesForTesting() const { return visibleNodes; }
+    bool nodeIsMessagableForTesting(NodeId id) const;
+    uint8_t nodeChannelForTesting(NodeId id) const;
+    bool nodeHasKeyForTesting(NodeId id) const;
+    int8_t nodeHopsForTesting(NodeId id) const;
+    const char *nodeDisplayNameForTesting(NodeId id) const;
+    const char *nodeShortNameForTesting(NodeId id) const;
+    NodePosition nodePositionForTesting(NodeId id) const;
+    NodeId nodePurgeCandidateForTesting(NodeId incoming) const;
+    void corruptLegacyNodePanelForTesting(NodeId id);
 #endif
 
     enum BasicSettings {
@@ -271,6 +280,18 @@ class TFTView_320x240 : public MeshtasticView
     void updateStatistics(const meshtastic_MeshPacket &p);
     void updateSignalStrength(int32_t rssi, float snr);
     int32_t signalStrength2Percent(int32_t rx_rssi, float rx_snr);
+    lv_obj_t *nodePanel(NodeId id) const;
+    NodeId nodeIdForPanel(const lv_obj_t *panel) const;
+    void selectNode(NodeId id);
+    bool nodeIsMessagable(NodeId id) const;
+    uint8_t nodeChannel(NodeId id) const;
+    bool nodeHasKey(NodeId id) const;
+    int8_t nodeHops(NodeId id) const;
+    const char *nodeDisplayName(NodeId id) const;
+    const char *nodeShortName(NodeId id) const;
+    NodePosition nodePosition(NodeId id) const;
+    NodeId nodePurgeCandidate(NodeId incoming) const;
+    uint8_t nodeHopLimit(NodeId id, int8_t unknownHops) const;
 
     uint32_t preset2val(meshtastic_Config_LoRaConfig_ModemPreset preset);
     meshtastic_Config_LoRaConfig_ModemPreset val2preset(uint32_t val);

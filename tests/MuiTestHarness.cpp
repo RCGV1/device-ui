@@ -252,6 +252,51 @@ const NodeRecord *MuiTestHarness::node(uint32_t nodeId) const
     return view->nodeRecordForTesting(nodeId);
 }
 
+bool MuiTestHarness::nodeIsMessagable(uint32_t nodeId) const
+{
+    return view->nodeIsMessagableForTesting(nodeId);
+}
+
+uint8_t MuiTestHarness::nodeChannel(uint32_t nodeId) const
+{
+    return view->nodeChannelForTesting(nodeId);
+}
+
+bool MuiTestHarness::nodeHasKey(uint32_t nodeId) const
+{
+    return view->nodeHasKeyForTesting(nodeId);
+}
+
+int8_t MuiTestHarness::nodeHops(uint32_t nodeId) const
+{
+    return view->nodeHopsForTesting(nodeId);
+}
+
+const char *MuiTestHarness::nodeDisplayName(uint32_t nodeId) const
+{
+    return view->nodeDisplayNameForTesting(nodeId);
+}
+
+const char *MuiTestHarness::nodeShortName(uint32_t nodeId) const
+{
+    return view->nodeShortNameForTesting(nodeId);
+}
+
+NodePosition MuiTestHarness::nodePosition(uint32_t nodeId) const
+{
+    return view->nodePositionForTesting(nodeId);
+}
+
+uint32_t MuiTestHarness::nodePurgeCandidate(uint32_t incoming) const
+{
+    return view->nodePurgeCandidateForTesting(incoming);
+}
+
+void MuiTestHarness::corruptLegacyNodePanel(uint32_t nodeId)
+{
+    view->corruptLegacyNodePanelForTesting(nodeId);
+}
+
 const NodeStore &MuiTestHarness::store() const
 {
     return view->nodeStoreForTesting();
