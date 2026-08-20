@@ -522,6 +522,15 @@ void TFTView_320x240::focusVirtualNodeForTesting(NodeId id)
 #endif
 }
 
+void TFTView_320x240::scrollVirtualNodeForTesting(NodeId id)
+{
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    if (virtualNodeList) {
+        virtualNodeList->scrollTo(id, LV_ANIM_OFF);
+    }
+#endif
+}
+
 void TFTView_320x240::enableVirtualNodeListForTesting()
 {
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
@@ -7671,12 +7680,12 @@ void TFTView_320x240::syncVisibleNodeIndex(void)
 void TFTView_320x240::syncNodeListPresentation(void)
 {
     syncVisibleNodeIndex();
-    if (currentNode && (!nodeStore.find(currentNode) || !visibleNodes.contains(currentNode))) {
-        selectNode(0);
-    }
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
     if (!useVirtualNodeList) {
         return;
+    }
+    if (currentNode && !nodeStore.find(currentNode)) {
+        selectNode(0);
     }
     ensureVirtualNodeList();
     if (virtualNodeList) {

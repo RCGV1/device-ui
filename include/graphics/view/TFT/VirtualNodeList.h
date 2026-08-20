@@ -76,10 +76,21 @@ class VirtualNodeList
     void createRowPool();
     void updateVirtualContentHeight();
     void bindRow(ReusableRow &row, const NodeRecord &record, bool isExpanded);
+    void attachGroupNavigation();
+    void detachGroupNavigation();
+    void handleGroupFocus(lv_group_t *group);
+    void handleGroupEdge(bool forward);
+    void noteFocusedButton(lv_obj_t *button);
+    bool focusAdjacent(NodeId id, int direction);
+    size_t poolIndexForButton(lv_obj_t *button) const;
+    size_t firstVisiblePoolIndex() const;
+    size_t lastVisiblePoolIndex() const;
 
     static void scrollEventCallback(lv_event_t *e);
     static void rowClickCallback(lv_event_t *e);
     static void rowPositionCallback(lv_event_t *e);
+    static void groupFocusCallback(lv_group_t *group);
+    static void groupEdgeCallback(lv_group_t *group, bool forward);
 
     lv_obj_t *parentPanel = nullptr;
     lv_obj_t *spacer = nullptr;
@@ -94,4 +105,12 @@ class VirtualNodeList
     std::vector<ReusableRow> rowPool;
     std::vector<int32_t> prefixHeights;
     uint32_t bindGeneration = 0;
+    lv_group_t *attachedGroup = nullptr;
+    lv_group_focus_cb_t previousFocusCallback = nullptr;
+    lv_group_edge_cb_t previousEdgeCallback = nullptr;
+    bool previousGroupWrap = true;
+    bool ownsAttachedGroup = false;
+    NodeId lastFocusedId = 0;
+    size_t lastFocusedPoolIndex = POOL_SIZE;
+    bool redirectingGroupFocus = false;
 };

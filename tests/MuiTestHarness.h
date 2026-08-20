@@ -127,6 +127,10 @@ class MuiTestHarness
     bool mapPanelVisible() const;
     void dispatchVirtualNodeEvent(uint32_t nodeId, lv_event_code_t eventCode);
     void dispatchVirtualNodePositionEvent(uint32_t nodeId);
+    bool focusRenderedVirtualNode(uint32_t nodeId);
+    void scrollVirtualNodeIntoView(uint32_t nodeId);
+    void focusNextInGroup();
+    void focusPreviousInGroup();
     void sendActiveText(const char *msg);
     const NodeStore &store() const;
     const VisibleNodeIndex &visibleIndex() const;

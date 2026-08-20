@@ -513,10 +513,6 @@ lv_obj_t *virtualRowPositionLabel(lv_obj_t *root, uint32_t nodeId)
 
 void MuiTestHarness::dispatchVirtualNodeEvent(uint32_t nodeId, lv_event_code_t eventCode)
 {
-    if (eventCode == LV_EVENT_FOCUSED) {
-        view->focusVirtualNodeForTesting(nodeId);
-        pump();
-    }
     lv_obj_t *button = virtualRowButton(nodeListRootForTesting(), nodeId);
     if (button) {
         lv_obj_send_event(button, eventCode, nullptr);
@@ -531,6 +527,35 @@ void MuiTestHarness::dispatchVirtualNodePositionEvent(uint32_t nodeId)
         lv_obj_send_event(label, LV_EVENT_CLICKED, nullptr);
         pump();
     }
+}
+
+bool MuiTestHarness::focusRenderedVirtualNode(uint32_t nodeId)
+{
+    lv_obj_t *button = virtualRowButton(nodeListRootForTesting(), nodeId);
+    if (!button) {
+        return false;
+    }
+    lv_group_focus_obj(button);
+    pump();
+    return true;
+}
+
+void MuiTestHarness::scrollVirtualNodeIntoView(uint32_t nodeId)
+{
+    view->scrollVirtualNodeForTesting(nodeId);
+    pump();
+}
+
+void MuiTestHarness::focusNextInGroup()
+{
+    lv_group_focus_next(lv_group_get_default());
+    pump();
+}
+
+void MuiTestHarness::focusPreviousInGroup()
+{
+    lv_group_focus_prev(lv_group_get_default());
+    pump();
 }
 
 void MuiTestHarness::sendActiveText(const char *msg)

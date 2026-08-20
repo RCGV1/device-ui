@@ -143,6 +143,7 @@ class TFTView_320x240 : public MeshtasticView
     bool mapPanelVisibleForTesting() const;
     void sendActiveTextForTesting(char *msg);
     void focusVirtualNodeForTesting(NodeId id);
+    void scrollVirtualNodeForTesting(NodeId id);
     void enableVirtualNodeListForTesting();
     void setOfflineFilterForTesting(bool enabled);
     void setPositionFilterForTesting(bool enabled);

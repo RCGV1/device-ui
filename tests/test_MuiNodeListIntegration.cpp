@@ -1,5 +1,6 @@
 #include "MuiTestHarness.h"
 #include "graphics/common/MeshtasticView.h"
+#include "graphics/view/TFT/VirtualNodeList.h"
 #include <doctest/doctest.h>
 
 #ifdef DEVICE_UI_HEADLESS_TEST
@@ -480,7 +481,8 @@ TEST_CASE("gated virtual node list keeps selection stable across recycling, filt
     }
     harness.showNodesScreen();
 
-    harness.dispatchVirtualNodeEvent(25, LV_EVENT_FOCUSED);
+    harness.scrollVirtualNodeIntoView(25);
+    REQUIRE(harness.focusRenderedVirtualNode(25));
     CHECK(harness.selectedNode() == 25U);
 
     harness.setCurrentTime(2000U);
@@ -489,7 +491,12 @@ TEST_CASE("gated virtual node list keeps selection stable across recycling, filt
     CHECK(harness.node(25) != nullptr);
 
     harness.setPositionFilterFixture(true);
-    CHECK(harness.selectedNode() == 0U);
+    CHECK(harness.selectedNode() == 25U);
+    CHECK(harness.node(25) != nullptr);
+
+    harness.setPositionFilterFixture(false);
+    CHECK(harness.selectedNode() == 25U);
+    CHECK(virtualRowSnapshot(harness, 25).longName == "Selectable Node");
 
     harness.resetNodeList();
     harness.enableVirtualNodeListFixture();
@@ -500,6 +507,62 @@ TEST_CASE("gated virtual node list keeps selection stable across recycling, filt
     harness.addUntilPurgeFixture(250);
     CHECK(harness.node(1) == nullptr);
     CHECK(harness.selectedNode() == 0U);
+}
+
+TEST_CASE("gated virtual node list group focus traverses past recycled pool boundaries")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.enableVirtualNodeListFixture();
+    harness.setCurrentTime(1700000000U);
+
+    for (uint32_t i = 1; i <= 30; ++i) {
+        char shortName[8]{};
+        std::snprintf(shortName, sizeof(shortName), "N%02u", i);
+        harness.addNodeFixture(i, shortName, "Focusable Node", 1000U + i);
+    }
+    harness.showNodesScreen();
+
+    const NodeId lastRendered = renderedVirtualNodeAt(harness, VirtualNodeList::POOL_SIZE - 1);
+    auto lastIndex = harness.visibleIndex().indexOf(lastRendered);
+    REQUIRE(lastIndex.has_value());
+    REQUIRE(lastIndex.value() + 1 < harness.visibleIndex().ids().size());
+    const NodeId nextLogical = harness.visibleIndex().ids()[lastIndex.value() + 1];
+
+    REQUIRE(harness.focusRenderedVirtualNode(lastRendered));
+    CHECK(harness.selectedNode() == lastRendered);
+    harness.focusNextInGroup();
+    CHECK(harness.selectedNode() == nextLogical);
+    CHECK(virtualRowSnapshot(harness, nextLogical).longName == "Focusable Node");
+
+    harness.scrollVirtualNodeIntoView(20);
+    const NodeId firstRendered = renderedVirtualNodeAt(harness, 0);
+    auto firstIndex = harness.visibleIndex().indexOf(firstRendered);
+    REQUIRE(firstIndex.has_value());
+    REQUIRE(firstIndex.value() > 0);
+    const NodeId previousLogical = harness.visibleIndex().ids()[firstIndex.value() - 1];
+
+    REQUIRE(harness.focusRenderedVirtualNode(firstRendered));
+    CHECK(harness.selectedNode() == firstRendered);
+    harness.focusPreviousInGroup();
+    CHECK(harness.selectedNode() == previousLogical);
+    CHECK(virtualRowSnapshot(harness, previousLogical).longName == "Focusable Node");
+}
+
+TEST_CASE("default legacy node list selection is unchanged by virtual selection handling")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(1700000000U);
+
+    harness.addNodeFixture(0x11111111, "ONE", "One Node", 1699999900U, MeshtasticView::router, true, false, 1);
+    harness.showNodesScreen();
+    harness.selectNode(0x11111111);
+    REQUIRE_FALSE(harness.virtualNodeListEnabled());
+    CHECK(harness.selectedNode() == 0x11111111);
+
+    harness.setPositionFilterFixture(true);
+    CHECK(harness.selectedNode() == 0x11111111);
 }
 
 TEST_CASE("active direct chats protect purge candidates in legacy and virtual node lists")
