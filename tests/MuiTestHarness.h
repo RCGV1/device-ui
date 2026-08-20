@@ -82,6 +82,7 @@ class MuiTestHarness
     void addActiveChatFixture(uint32_t nodeId, uint8_t channel = 0);
     void toggleResyncPresentationFixture();
     void enableVirtualNodeListFixture();
+    void configureInputDevicesFixture(bool keyboard, bool encoder, bool pointer);
     void setOfflineFilterFixture(bool enabled);
     void setPositionFilterFixture(bool enabled);
     void addUntilPurgeFixture(size_t count);
@@ -134,6 +135,9 @@ class MuiTestHarness
     void focusNextInVirtualGroup();
     void focusPreviousInVirtualGroup();
     lv_group_t *virtualNavigationGroup() const;
+    lv_group_t *keyboardInputGroup() const;
+    lv_group_t *encoderInputGroup() const;
+    lv_group_t *pointerInputGroup() const;
     void sendActiveText(const char *msg);
     const NodeStore &store() const;
     const VisibleNodeIndex &visibleIndex() const;

@@ -7,6 +7,7 @@
 #include "graphics/common/ViewFactory.h"
 #include "graphics/driver/DisplayDriverConfig.h"
 #include "graphics/view/TFT/TFTView_320x240.h"
+#include "input/InputDriver.h"
 #include "meshtastic/mesh.pb.h"
 #include "meshtastic/telemetry.pb.h"
 #include <cstring>
@@ -183,6 +184,17 @@ void MuiTestHarness::toggleResyncPresentationFixture()
 void MuiTestHarness::enableVirtualNodeListFixture()
 {
     view->enableVirtualNodeListForTesting();
+}
+
+void MuiTestHarness::configureInputDevicesFixture(bool keyboard, bool encoder, bool pointer)
+{
+#ifdef DEVICE_UI_HEADLESS_TEST
+    view->getInputDriver()->configureDevicesForTesting(keyboard, encoder, pointer);
+#else
+    (void)keyboard;
+    (void)encoder;
+    (void)pointer;
+#endif
 }
 
 void MuiTestHarness::setOfflineFilterFixture(bool enabled)
@@ -573,6 +585,24 @@ void MuiTestHarness::focusPreviousInVirtualGroup()
 lv_group_t *MuiTestHarness::virtualNavigationGroup() const
 {
     return view->virtualNodeListNavigationGroupForTesting();
+}
+
+lv_group_t *MuiTestHarness::keyboardInputGroup() const
+{
+    auto *keyboard = view->getInputDriver()->getKeyboard();
+    return keyboard ? lv_indev_get_group(keyboard) : nullptr;
+}
+
+lv_group_t *MuiTestHarness::encoderInputGroup() const
+{
+    auto *encoder = view->getInputDriver()->getEncoder();
+    return encoder ? lv_indev_get_group(encoder) : nullptr;
+}
+
+lv_group_t *MuiTestHarness::pointerInputGroup() const
+{
+    auto *pointer = view->getInputDriver()->getPointer();
+    return pointer ? lv_indev_get_group(pointer) : nullptr;
 }
 
 void MuiTestHarness::sendActiveText(const char *msg)

@@ -43,6 +43,10 @@ class InputDriver
     virtual lv_indev_t *getEncoder(void) { return encoder; }
     virtual lv_indev_t *getButton(void) { return button; }
 
+#ifdef DEVICE_UI_HEADLESS_TEST
+    void configureDevicesForTesting(bool withKeyboard, bool withEncoder, bool withPointer);
+#endif
+
     static lv_group_t *getInputGroup(void) { return inputGroup; }
 
   protected:

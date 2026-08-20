@@ -529,6 +529,7 @@ TEST_CASE("gated virtual node list group focus traverses past recycled pool boun
 {
     MuiTestHarness harness;
     harness.resetNodeList();
+    harness.configureInputDevicesFixture(true, true, false);
     harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
@@ -547,6 +548,9 @@ TEST_CASE("gated virtual node list group focus traverses past recycled pool boun
 
     REQUIRE(harness.focusRenderedVirtualNode(lastRendered));
     CHECK(harness.selectedNode() == lastRendered);
+    REQUIRE(harness.virtualNavigationGroup() != nullptr);
+    CHECK(harness.keyboardInputGroup() == harness.virtualNavigationGroup());
+    CHECK(harness.encoderInputGroup() == harness.virtualNavigationGroup());
     harness.focusNextInVirtualGroup();
     CHECK(harness.selectedNode() == nextLogical);
     CHECK(virtualRowSnapshot(harness, nextLogical).longName == "Focusable Node");
@@ -560,9 +564,48 @@ TEST_CASE("gated virtual node list group focus traverses past recycled pool boun
 
     REQUIRE(harness.focusRenderedVirtualNode(firstRendered));
     CHECK(harness.selectedNode() == firstRendered);
+    CHECK(harness.keyboardInputGroup() == harness.virtualNavigationGroup());
+    CHECK(harness.encoderInputGroup() == harness.virtualNavigationGroup());
     harness.focusPreviousInVirtualGroup();
     CHECK(harness.selectedNode() == previousLogical);
     CHECK(virtualRowSnapshot(harness, previousLogical).longName == "Focusable Node");
+
+    harness.configureInputDevicesFixture(false, false, false);
+}
+
+TEST_CASE("gated virtual node screen assigns configured input devices to the private group and restores default")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    lv_group_t *defaultGroup = lv_group_create();
+    REQUIRE(defaultGroup != nullptr);
+    lv_group_set_default(defaultGroup);
+
+    harness.configureInputDevicesFixture(true, true, true);
+    harness.enableVirtualNodeListFixture();
+    harness.setCurrentTime(1700000000U);
+    for (uint32_t i = 1; i <= 10; ++i) {
+        char shortName[8]{};
+        std::snprintf(shortName, sizeof(shortName), "N%02u", i);
+        harness.addNodeFixture(i, shortName, "Input Group Node", 1000U + i);
+    }
+
+    harness.showNodesScreen();
+    REQUIRE(harness.virtualNavigationGroup() != nullptr);
+    CHECK(harness.virtualNavigationGroup() != defaultGroup);
+    CHECK(harness.keyboardInputGroup() == harness.virtualNavigationGroup());
+    CHECK(harness.encoderInputGroup() == harness.virtualNavigationGroup());
+    CHECK(harness.pointerInputGroup() == nullptr);
+
+    harness.showTraceRoute();
+    CHECK(harness.keyboardInputGroup() == defaultGroup);
+    CHECK(harness.encoderInputGroup() == defaultGroup);
+    CHECK(harness.pointerInputGroup() == nullptr);
+
+    harness.configureInputDevicesFixture(false, false, false);
+    lv_group_set_default(nullptr);
+    lv_group_delete(defaultGroup);
 }
 
 TEST_CASE("gated virtual node list navigation does not take over the shared default group")
