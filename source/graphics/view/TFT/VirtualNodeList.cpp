@@ -5,6 +5,7 @@
 #include "styles.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -48,13 +49,32 @@ void setHidden(lv_obj_t *obj, bool hidden)
     }
 }
 
+std::tuple<uint32_t, uint32_t> nodeColor(NodeId nodeNum)
+{
+    uint32_t red = (nodeNum & 0xff0000) >> 16;
+    uint32_t green = (nodeNum & 0xff00) >> 8;
+    uint32_t blue = nodeNum & 0xff;
+    while (red + green + blue < 0xF0) {
+        red += red / 3 + 10;
+        green += green / 3 + 10;
+        blue += blue / 3 + 10;
+    }
+
+    return std::make_tuple((red << 16) | (green << 8) | blue, (2 * red + 2 * green + blue) > 600 ? 0x000000 : 0xFFFFFF);
+}
+
 void setRoleImage(const NodeRecord &record, lv_obj_t *img)
 {
+    uint32_t bgColor = 0;
+    uint32_t fgColor = 0;
+    std::tie(bgColor, fgColor) = nodeColor(record.id);
+
     if (record.unmessagable) {
         lv_image_set_src(img, &img_unmessagable_image);
+        lv_obj_set_style_border_color(img, lv_color_hex(bgColor), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_color(img, lv_color_hex(0x202020), LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_image_recolor(img, lv_color_hex(0xff5555), LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_image_recolor_opa(img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_color(img, lv_color_hex(0x202020), LV_PART_MAIN | LV_STATE_DEFAULT);
         return;
     }
 
@@ -84,7 +104,57 @@ void setRoleImage(const NodeRecord &record, lv_obj_t *img)
         break;
     }
     lv_obj_set_style_image_recolor(img, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_image_recolor_opa(img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_image_recolor_opa(img, fgColor ? 0 : 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(img, lv_color_hex(bgColor), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(img, lv_color_hex(bgColor), LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
+void formatLegacyShortDisplay(char *dest, size_t destSize, const char *shortName, NodeId nodeId)
+{
+    if (destSize == 0) {
+        return;
+    }
+
+    if (!shortName || lv_txt_get_width(shortName, std::strlen(shortName), &ui_font_montserrat_14, 0) <= 4) {
+        std::snprintf(dest, destSize, "%04x", static_cast<unsigned int>(nodeId & 0xffff));
+    } else {
+        std::snprintf(dest, destSize, "%s", shortName);
+    }
+}
+
+void formatShortName(const NodeRecord &record, const NodeListRenderContext &context, char *buffer, size_t bufferSize)
+{
+    formatLegacyShortDisplay(buffer, bufferSize, record.user.short_name, record.id);
+
+    if (!context.hasOwnPosition || !record.position.known || record.id == context.ownNode ||
+        (record.position.latitude == 0 && record.position.longitude == 0) || bufferSize < 6) {
+        return;
+    }
+
+    for (size_t i = 0; i < 4 && i + 1 < bufferSize; ++i) {
+        if (buffer[i] == '\0') {
+            buffer[i] = ' ';
+        }
+    }
+
+    const float dx = 71.5f * 1e-7f * static_cast<float>(context.ownLongitude - record.position.longitude);
+    const float dy = 111.3f * 1e-7f * static_cast<float>(context.ownLatitude - record.position.latitude);
+    const float dist = std::sqrt(dx * dx + dy * dy);
+
+    buffer[4] = '\n';
+    if (context.metricUnits) {
+        if (dist > 1.0f) {
+            std::snprintf(&buffer[5], bufferSize - 5, "%.1f km ", dist);
+        } else {
+            std::snprintf(&buffer[5], bufferSize - 5, "%u m ", static_cast<unsigned int>(std::round(dist * 1000.0f)));
+        }
+    } else {
+        if (dist > 0.1f) {
+            std::snprintf(&buffer[5], bufferSize - 5, "%.1f mi ", std::round(dist * 0.621371f));
+        } else {
+            std::snprintf(&buffer[5], bufferSize - 5, "%u ft ", static_cast<unsigned int>(dist * 3280.84f));
+        }
+    }
 }
 } // namespace
 
@@ -283,12 +353,14 @@ void VirtualNodeList::updateVirtualContentHeight()
     }
 }
 
-void VirtualNodeList::sync(const NodeStore &store, const VisibleNodeIndex &index, NodeId expanded, uint32_t now)
+void VirtualNodeList::sync(const NodeStore &store, const VisibleNodeIndex &index, NodeId expanded, uint32_t now,
+                           const NodeListRenderContext &context)
 {
     currentStore = &store;
     currentIndex = &index;
     expandedId = expanded;
     currentTime = now != 0 ? now : static_cast<uint32_t>(std::time(nullptr));
+    renderContext = context;
 
     updateVirtualContentHeight();
     refreshVisibleRows();
@@ -339,13 +411,18 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     lv_obj_set_user_data(row.btn, reinterpret_cast<void *>(static_cast<uintptr_t>(record.id)));
 
     setRoleImage(record, row.img);
-    if (!record.hasKey) {
-        lv_obj_set_style_border_color(row.img, lv_color_hex(0xff5555), LV_PART_MAIN | LV_STATE_DEFAULT);
-    } else {
-        lv_obj_set_style_border_color(row.img, lv_obj_get_style_bg_color(row.img, LV_PART_MAIN), LV_PART_MAIN | LV_STATE_DEFAULT);
+    if (!record.unmessagable) {
+        if (!record.hasKey) {
+            lv_obj_set_style_border_color(row.img, lv_color_hex(0xff5555), LV_PART_MAIN | LV_STATE_DEFAULT);
+        } else {
+            lv_obj_set_style_border_color(row.img, lv_obj_get_style_bg_color(row.img, LV_PART_MAIN),
+                                          LV_PART_MAIN | LV_STATE_DEFAULT);
+        }
     }
 
-    setRowText(row.lblShort, row.shortText, record.user.short_name);
+    formatShortName(record, renderContext, row.shortText, sizeof(row.shortText));
+    lv_label_set_text_static(row.lblShort, row.shortText);
+    lv_obj_set_pos(row.lblShort, 30, std::strchr(row.shortText, '\n') ? -1 : 10);
     setRowText(row.lblLong, row.longText, record.user.long_name);
 
     if (record.hasDeviceMetrics) {
@@ -359,10 +436,10 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     formatLastHeard(record.lastHeard, currentTime, row.lastHeardText, sizeof(row.lastHeardText));
     lv_label_set_text_static(row.lblLh, row.lastHeardText);
 
-    if (record.hopsAway >= 0) {
+    if (record.signalDisplay == NodeSignalDisplayKind::Hops && record.hopsAway >= 0) {
         std::snprintf(row.signalText, sizeof(row.signalText), "hops: %d", static_cast<int>(record.hopsAway));
-    } else if (record.rssi != 0 || record.snr != 0.0f) {
-        std::snprintf(row.signalText, sizeof(row.signalText), "rssi: %d", static_cast<int>(record.rssi));
+    } else if (record.signalDisplay == NodeSignalDisplayKind::Rssi && (record.rssi != 0 || record.snr != 0.0f)) {
+        std::snprintf(row.signalText, sizeof(row.signalText), "rssi: %d snr: %.1f", static_cast<int>(record.rssi), record.snr);
     } else {
         row.signalText[0] = '\0';
     }

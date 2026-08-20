@@ -1,4 +1,5 @@
 #include "doctest.h"
+#include "graphics/common/MeshtasticView.h"
 #include "graphics/view/TFT/VirtualNodeList.h"
 #include "images.h"
 #include "tests/MuiTestHarness.h"
@@ -39,6 +40,61 @@ std::string labelText(lv_obj_t *row, uint32_t childIndex)
 bool childHidden(lv_obj_t *row, uint32_t childIndex)
 {
     return lv_obj_has_flag(lv_obj_get_child(row, static_cast<int32_t>(childIndex)), LV_OBJ_FLAG_HIDDEN);
+}
+
+MuiRowSnapshot snapshotVirtualRow(lv_obj_t *row)
+{
+    lv_obj_t *image = lv_obj_get_child(row, 0);
+    lv_obj_t *shortName = lv_obj_get_child(row, 3);
+    return {
+        labelText(row, 2),
+        labelText(row, 3),
+        labelText(row, 4),
+        labelText(row, 5),
+        labelText(row, 6),
+        labelText(row, 7),
+        labelText(row, 8),
+        labelText(row, 9),
+        labelText(row, 10),
+        lv_obj_get_y_aligned(shortName),
+        lv_color_to_u32(lv_obj_get_style_bg_color(image, LV_PART_MAIN)),
+        lv_color_to_u32(lv_obj_get_style_border_color(image, LV_PART_MAIN)),
+        lv_color_to_u32(lv_obj_get_style_image_recolor(image, LV_PART_MAIN)),
+        lv_obj_get_style_image_recolor_opa(image, LV_PART_MAIN),
+    };
+}
+
+MuiRowSnapshot syncVirtualSnapshotFromLegacy(MuiTestHarness &legacy, NodeId nodeId, NodeId expanded = 0, NodeId ownNode = 0)
+{
+    lv_obj_t *virtualRoot = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(virtualRoot, 320, 240);
+    lv_obj_set_style_layout(virtualRoot, LV_LAYOUT_NONE, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    MuiRowSnapshot snapshot;
+    {
+        DummyActionSink sink;
+        VirtualNodeList list(virtualRoot, sink);
+        VisibleNodeIndex index;
+        NodeListFilter filter;
+        index.rebuild(legacy.store(), filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
+
+        NodeListRenderContext context;
+        context.ownNode = ownNode;
+        const NodePosition ownPosition = legacy.nodePosition(ownNode);
+        context.hasOwnPosition = ownPosition.known;
+        context.ownLatitude = ownPosition.latitude;
+        context.ownLongitude = ownPosition.longitude;
+        context.metricUnits = true;
+
+        list.sync(legacy.store(), index, expanded, 0, context);
+        legacy.pump();
+
+        lv_obj_t *row = boundRow(virtualRoot, nodeId);
+        REQUIRE(row != nullptr);
+        snapshot = snapshotVirtualRow(row);
+    }
+    lv_obj_delete(virtualRoot);
+    return snapshot;
 }
 
 } // namespace
@@ -271,6 +327,99 @@ TEST_CASE("VirtualNodeList renders legacy role and unmessagable icons from the r
 
     CHECK(lv_image_get_src(lv_obj_get_child(routerRow, 0)) == &img_node_router_image);
     CHECK(lv_image_get_src(lv_obj_get_child(blockedRow, 0)) == &img_unmessagable_image);
+}
+
+TEST_CASE("VirtualNodeList matches legacy event-driven row text and distance presentation")
+{
+    MuiTestHarness legacy;
+    legacy.resetNodeList();
+    legacy.setCurrentTime(1700000000U);
+
+    constexpr NodeId ownNode = 0xaaaa0001;
+    constexpr NodeId remoteNode = 0x12345678;
+    legacy.setOwnNodeFixture(ownNode);
+    legacy.addNodeFixture(ownNode, "SELF", "Own Node", 1699999900U, MeshtasticView::client, true, false, 0);
+    legacy.updatePositionFixture(ownNode, 377749000, -1224194000, 50, 9, 13);
+
+    legacy.addNodeFixture(remoteNode, "ABCD", "Remote Weather", 1699999880U, MeshtasticView::router, false, false, 2);
+    legacy.updatePositionFixture(remoteNode, 377750000, -1224190000, 44, 7, 12);
+    legacy.updateMetricsFixture(remoteNode, 85, 4.12f, 12.5f, 3.2f);
+    legacy.updateTelemetryFixture(remoteNode, 22.5f, 45.0f, 1013.25f, 42);
+    legacy.updateHopsFixture(remoteNode, 3);
+    legacy.updateSignalFixture(remoteNode, -70, 5.5f);
+    legacy.pump();
+
+    const MuiRowSnapshot legacyRow = legacy.legacyRowSnapshot(remoteNode);
+    const MuiRowSnapshot virtualRow = syncVirtualSnapshotFromLegacy(legacy, remoteNode, remoteNode, ownNode);
+
+    CHECK(virtualRow.longName == legacyRow.longName);
+    CHECK(virtualRow.shortName == legacyRow.shortName);
+    CHECK(virtualRow.shortNameY == legacyRow.shortNameY);
+    CHECK(virtualRow.battery == legacyRow.battery);
+    CHECK(virtualRow.lastHeard == legacyRow.lastHeard);
+    CHECK(virtualRow.signal == legacyRow.signal);
+    CHECK(virtualRow.position1 == legacyRow.position1);
+    CHECK(virtualRow.position2 == legacyRow.position2);
+    CHECK(virtualRow.telemetry1 == legacyRow.telemetry1);
+    CHECK(virtualRow.telemetry2 == legacyRow.telemetry2);
+}
+
+TEST_CASE("VirtualNodeList matches legacy signal label event order")
+{
+    {
+        MuiTestHarness signalThenHops;
+        signalThenHops.resetNodeList();
+        signalThenHops.setCurrentTime(1700000000U);
+        signalThenHops.addNodeFixture(0x11111111, "SIG1", "Signal Then Hops", 1699999900U);
+        signalThenHops.updateSignalFixture(0x11111111, -80, 4.2f);
+        signalThenHops.updateHopsFixture(0x11111111, 2);
+
+        CHECK(syncVirtualSnapshotFromLegacy(signalThenHops, 0x11111111).signal ==
+              signalThenHops.legacyRowSnapshot(0x11111111).signal);
+    }
+
+    {
+        MuiTestHarness hopsThenSignal;
+        hopsThenSignal.resetNodeList();
+        hopsThenSignal.setCurrentTime(1700000000U);
+        hopsThenSignal.addNodeFixture(0x22222222, "SIG2", "Hops Then Signal", 1699999900U);
+        hopsThenSignal.updateHopsFixture(0x22222222, 4);
+        hopsThenSignal.updateSignalFixture(0x22222222, -71, 5.5f);
+
+        CHECK(syncVirtualSnapshotFromLegacy(hopsThenSignal, 0x22222222).signal ==
+              hopsThenSignal.legacyRowSnapshot(0x22222222).signal);
+    }
+}
+
+TEST_CASE("VirtualNodeList matches legacy icon style and short-name fallback after node events")
+{
+    MuiTestHarness legacy;
+    legacy.resetNodeList();
+    legacy.setCurrentTime(1700000000U);
+
+    constexpr NodeId noKeyRouter = 0x11112222;
+    constexpr NodeId blocked = 0x22223333;
+    constexpr NodeId blankShort = 0x1234abcd;
+
+    legacy.addNodeFixture(noKeyRouter, "RTR1", "Router Without Key", 1699999900U, MeshtasticView::router, false, false, 0);
+    legacy.addNodeFixture(blocked, "BLKD", "Blocked Node", 1699999890U, MeshtasticView::client, true, true, 0);
+    legacy.addNodeFixture(blankShort, "", "Blank Short", 1699999880U, MeshtasticView::client, true, false, 0);
+    legacy.pump();
+
+    const MuiRowSnapshot legacyRouter = legacy.legacyRowSnapshot(noKeyRouter);
+    const MuiRowSnapshot virtualRouter = syncVirtualSnapshotFromLegacy(legacy, noKeyRouter);
+    CHECK(virtualRouter.imageBg == legacyRouter.imageBg);
+    CHECK(virtualRouter.imageBorder == legacyRouter.imageBorder);
+    CHECK(virtualRouter.imageRecolorOpa == legacyRouter.imageRecolorOpa);
+
+    const MuiRowSnapshot legacyBlocked = legacy.legacyRowSnapshot(blocked);
+    const MuiRowSnapshot virtualBlocked = syncVirtualSnapshotFromLegacy(legacy, blocked);
+    CHECK(virtualBlocked.imageBg == legacyBlocked.imageBg);
+    CHECK(virtualBlocked.imageBorder == legacyBlocked.imageBorder);
+    CHECK(virtualBlocked.imageRecolor == legacyBlocked.imageRecolor);
+    CHECK(virtualBlocked.imageRecolorOpa == legacyBlocked.imageRecolorOpa);
+
+    CHECK(syncVirtualSnapshotFromLegacy(legacy, blankShort).shortName == legacy.legacyRowSnapshot(blankShort).shortName);
 }
 
 TEST_CASE("VirtualNodeList expansion and stable selection")

@@ -93,3 +93,52 @@ GREEN:
 
 - `NodeListFilterPolicy` currently has one policy value, `LegacyCompatible`, because Task 3 only needed the compatibility contract made explicit.
 - The virtual row now mirrors legacy metric strings for the metric/default display path; non-metric unit parity can be covered when virtual rows are promoted beyond candidate/test tooling.
+
+## Review Fix Round 1
+
+Addressed the Important review findings with event-driven legacy-vs-virtual parity tests.
+
+### Changes
+
+- Added `NodeSignalDisplayKind` to `NodeRecord` so `NodeStore::updateSignal()` and `NodeStore::updateHops()` preserve legacy event order: whichever event arrived last controls the signal label.
+- Added `NodeListRenderContext` to virtual sync so tests/tools can provide own-node position and display units without wiring virtual rows into normal `TFTView`.
+- Updated virtual row binding to match legacy-observable row text/style:
+  - short-name fallback uses legacy `lv_txt_get_width(...) <= 4` then `%04x`;
+  - distance appends to the short-name label and moves the short-name Y position to `-1`;
+  - RSSI label includes SNR and only wins when the RSSI event was last;
+  - role/unmessagable/public-key icon background, border, recolor, and recolor opacity follow the legacy color calculation.
+- Added test harness row snapshots that read legacy labels and image styles from actual LVGL row objects after production `TFTView_320x240` node mutation/update methods run.
+- Added virtual snapshots by rebuilding `VisibleNodeIndex` from the same `NodeStore` produced by the legacy event flow, then comparing observable row strings and icon styles.
+
+### RED Evidence
+
+- Command:
+  - `PATH="/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task3-venv/bin:$PATH" cmake --build build-mui-node-list-headless --target tests -j 8 && ./build-mui-node-list-headless/bin/tests "--test-case=*VirtualNodeList*"`
+- Expected compile RED after adding review-driven tests:
+  - `tests/test_VirtualNodeList.cpp:79:5: error: unknown type name 'NodeListRenderContext'`
+  - role enum use in the new tests also required including `graphics/common/MeshtasticView.h`.
+- After adding the production render context, the same focused command reached runtime REDs:
+  - first event-driven distance test crashed due to the test helper deleting the LVGL parent before `VirtualNodeList` destroyed its pooled rows;
+  - last-heard parity showed `2 min` vs legacy blank because parity helper used injected current time while legacy `lastHeardToString()` reads wall clock;
+  - signal-order helper returned no virtual row when two harnesses were alive in one test scope;
+  - unmessagable border compared as `0xff202020` vs legacy `0xff537272`, exposing a border override after the unmessagable style path.
+
+### GREEN Evidence
+
+- Focused virtual list:
+  - `PATH="/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task3-venv/bin:$PATH" cmake --build build-mui-node-list-headless --target tests -j 8 && ./build-mui-node-list-headless/bin/tests "--test-case=*VirtualNodeList*"`
+  - 10 test cases passed, 0 failed, 74 assertions passed.
+- Full CTest:
+  - `PATH="/Users/benjaminfaershtein/Documents/device-ui-mui-node-list/.codex/task3-venv/bin:$PATH" ctest --test-dir build-mui-node-list-headless --output-on-failure`
+  - 9/9 tests passed.
+  - Included `VirtualNodeListAllocator25`, `VirtualNodeListAllocator100`, and `VirtualNodeListAllocator250`.
+- Formatting/diff hygiene:
+  - `trunk fmt include/graphics/common/NodeStore.h source/graphics/common/NodeStore.cpp include/graphics/view/TFT/VirtualNodeList.h source/graphics/view/TFT/VirtualNodeList.cpp tests/MuiTestHarness.h tests/MuiTestHarness.cpp tests/test_VirtualNodeList.cpp`
+  - Checked 7 files, no issues.
+  - `git diff --check` passed.
+
+### Scope Notes
+
+- `VirtualNodeList` remains test/benchmark/video-only; no normal `TFTView` integration or clickable default behavior was added.
+- Static row-owned buffers remain in `ReusableRow`; the short-name buffer was widened to hold the legacy distance suffix without per-bind allocation.
+- Untracked build directories and `.codex/task3-venv` were preserved and not staged.

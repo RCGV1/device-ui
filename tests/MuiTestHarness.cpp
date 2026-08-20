@@ -95,6 +95,11 @@ void MuiTestHarness::setCurrentTime(uint32_t value)
     view->setCurrentTimeForTesting(value);
 }
 
+void MuiTestHarness::setOwnNodeFixture(uint32_t nodeId)
+{
+    view->setMyInfo(nodeId);
+}
+
 void MuiTestHarness::addNodeFixture(uint32_t nodeId, const char *shortName, const char *longName, uint32_t lastHeard,
                                     uint8_t role, bool hasKey, bool unmessagable, uint8_t channel)
 {
@@ -146,6 +151,11 @@ void MuiTestHarness::updateMetricsFixture(uint32_t nodeId, uint32_t batteryLevel
                                           float airUtilization)
 {
     view->updateMetrics(nodeId, batteryLevel, voltage, channelUtilization, airUtilization);
+}
+
+void MuiTestHarness::updateSignalFixture(uint32_t nodeId, int32_t rssi, float snr)
+{
+    view->updateSignalStrength(nodeId, rssi, snr);
 }
 
 void MuiTestHarness::updateHopsFixture(uint32_t nodeId, uint8_t hops)
@@ -413,6 +423,46 @@ const NodeStore &MuiTestHarness::store() const
 const VisibleNodeIndex &MuiTestHarness::visibleIndex() const
 {
     return view->visibleNodesForTesting();
+}
+
+MuiRowSnapshot MuiTestHarness::legacyRowSnapshot(uint32_t nodeId) const
+{
+    lv_obj_t *root = view->nodeListRootForTesting();
+    if (!root) {
+        return {};
+    }
+
+    const uint32_t childCount = lv_obj_get_child_count(root);
+    for (uint32_t index = 0; index < childCount; ++index) {
+        lv_obj_t *row = lv_obj_get_child(root, static_cast<int32_t>(index));
+        if (!row || lv_obj_get_child_count(row) < 11) {
+            continue;
+        }
+        lv_obj_t *longName = lv_obj_get_child(row, 2);
+        if (static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(longName))) != nodeId) {
+            continue;
+        }
+
+        lv_obj_t *image = lv_obj_get_child(row, 0);
+        lv_obj_t *shortName = lv_obj_get_child(row, 3);
+        return {
+            lv_label_get_text(longName),
+            lv_label_get_text(shortName),
+            lv_label_get_text(lv_obj_get_child(row, 4)),
+            lv_label_get_text(lv_obj_get_child(row, 5)),
+            lv_label_get_text(lv_obj_get_child(row, 6)),
+            lv_label_get_text(lv_obj_get_child(row, 7)),
+            lv_label_get_text(lv_obj_get_child(row, 8)),
+            lv_label_get_text(lv_obj_get_child(row, 9)),
+            lv_label_get_text(lv_obj_get_child(row, 10)),
+            lv_obj_get_y_aligned(shortName),
+            lv_color_to_u32(lv_obj_get_style_bg_color(image, LV_PART_MAIN)),
+            lv_color_to_u32(lv_obj_get_style_border_color(image, LV_PART_MAIN)),
+            lv_color_to_u32(lv_obj_get_style_image_recolor(image, LV_PART_MAIN)),
+            lv_obj_get_style_image_recolor_opa(image, LV_PART_MAIN),
+        };
+    }
+    return {};
 }
 
 lv_obj_t *MuiTestHarness::nodeListRootForTesting() const

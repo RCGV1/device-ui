@@ -18,6 +18,8 @@ struct NodePosition {
     uint32_t precision = 0;
 };
 
+enum class NodeSignalDisplayKind : uint8_t { None, Rssi, Hops };
+
 struct NodeRecord {
     NodeId id = 0;
     uint8_t channel = 0;
@@ -30,6 +32,7 @@ struct NodeRecord {
     int32_t rssi = 0;
     float snr = 0;
     int8_t hopsAway = -1;
+    NodeSignalDisplayKind signalDisplay = NodeSignalDisplayKind::None;
     NodePosition position{};
     bool hasDeviceMetrics = false;
     meshtastic_DeviceMetrics deviceMetrics{};

@@ -170,19 +170,28 @@ NodeMutation NodeStore::updateAirQualityMetrics(NodeId id, const meshtastic_AirQ
 NodeMutation NodeStore::updateSignal(NodeId id, int32_t rssi, float snr)
 {
     auto it = nodes.find(id);
-    if (it == nodes.end() || (it->second.rssi == rssi && it->second.snr == snr))
+    if (it == nodes.end())
         return unchanged(id);
+    const bool changed =
+        it->second.rssi != rssi || it->second.snr != snr || it->second.signalDisplay != NodeSignalDisplayKind::Rssi;
     it->second.rssi = rssi;
     it->second.snr = snr;
+    it->second.signalDisplay = NodeSignalDisplayKind::Rssi;
+    if (!changed)
+        return unchanged(id);
     return updated(id, NodeFieldSignal);
 }
 
 NodeMutation NodeStore::updateHops(NodeId id, int8_t hopsAway)
 {
     auto it = nodes.find(id);
-    if (it == nodes.end() || it->second.hopsAway == hopsAway)
+    if (it == nodes.end())
         return unchanged(id);
+    const bool changed = it->second.hopsAway != hopsAway || it->second.signalDisplay != NodeSignalDisplayKind::Hops;
     it->second.hopsAway = hopsAway;
+    it->second.signalDisplay = NodeSignalDisplayKind::Hops;
+    if (!changed)
+        return unchanged(id);
     return updated(id, NodeFieldHops);
 }
 

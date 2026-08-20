@@ -17,6 +17,14 @@ class NodeListActionSink
     virtual ~NodeListActionSink() = default;
 };
 
+struct NodeListRenderContext {
+    NodeId ownNode = 0;
+    bool hasOwnPosition = false;
+    int32_t ownLatitude = 0;
+    int32_t ownLongitude = 0;
+    bool metricUnits = true;
+};
+
 struct ReusableRow {
     lv_obj_t *panel = nullptr;
     lv_obj_t *img = nullptr;
@@ -30,7 +38,7 @@ struct ReusableRow {
     lv_obj_t *lblPos2 = nullptr;
     lv_obj_t *lblTm1 = nullptr;
     lv_obj_t *lblTm2 = nullptr;
-    char shortText[5]{};
+    char shortText[32]{};
     char longText[40]{};
     char batteryText[32]{};
     char lastHeardText[32]{};
@@ -52,7 +60,8 @@ class VirtualNodeList
     VirtualNodeList(lv_obj_t *parent, NodeListActionSink &sink);
     ~VirtualNodeList();
 
-    void sync(const NodeStore &store, const VisibleNodeIndex &index, NodeId expanded = 0, uint32_t currentTime = 0);
+    void sync(const NodeStore &store, const VisibleNodeIndex &index, NodeId expanded = 0, uint32_t currentTime = 0,
+              const NodeListRenderContext &context = {});
     void setExpanded(NodeId id);
     NodeId getExpanded() const { return expandedId; }
     void scrollTo(NodeId id, lv_anim_enable_t anim = LV_ANIM_OFF);
@@ -77,6 +86,7 @@ class VirtualNodeList
     const VisibleNodeIndex *currentIndex = nullptr;
     NodeId expandedId = 0;
     uint32_t currentTime = 0;
+    NodeListRenderContext renderContext{};
 
     std::vector<ReusableRow> rowPool;
     std::vector<int32_t> prefixHeights;

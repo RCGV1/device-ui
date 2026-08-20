@@ -37,6 +37,23 @@ struct MuiControllerCall {
     std::string text;
 };
 
+struct MuiRowSnapshot {
+    std::string longName;
+    std::string shortName;
+    std::string battery;
+    std::string lastHeard;
+    std::string signal;
+    std::string position1;
+    std::string position2;
+    std::string telemetry1;
+    std::string telemetry2;
+    int32_t shortNameY = 0;
+    uint32_t imageBg = 0;
+    uint32_t imageBorder = 0;
+    uint32_t imageRecolor = 0;
+    uint8_t imageRecolorOpa = 0;
+};
+
 class MuiTestHarness
 {
   public:
@@ -47,6 +64,7 @@ class MuiTestHarness
     bool ready();
     void resetNodeList();
     void setCurrentTime(uint32_t value);
+    void setOwnNodeFixture(uint32_t nodeId);
     void addNodeFixture(uint32_t nodeId, const char *shortName = "TEST", const char *longName = "Test Node",
                         uint32_t lastHeard = 0, uint8_t role = 0, bool hasKey = true, bool unmessagable = false,
                         uint8_t channel = 0);
@@ -58,6 +76,7 @@ class MuiTestHarness
     void updateTelemetryFixture(uint32_t nodeId, float temperature, float humidity, float pressure, uint16_t iaq);
     void updateMetricsFixture(uint32_t nodeId, uint32_t batteryLevel, float voltage, float channelUtilization,
                               float airUtilization);
+    void updateSignalFixture(uint32_t nodeId, int32_t rssi, float snr);
     void updateHopsFixture(uint32_t nodeId, uint8_t hops);
     void updateLastHeardFixture(uint32_t nodeId);
     void addActiveChatFixture(uint32_t nodeId, uint8_t channel = 0);
@@ -98,6 +117,7 @@ class MuiTestHarness
     MuiControllerCall lastTraceRoute() const;
     const NodeStore &store() const;
     const VisibleNodeIndex &visibleIndex() const;
+    MuiRowSnapshot legacyRowSnapshot(uint32_t nodeId) const;
     lv_obj_t *nodeListRootForTesting() const;
     void showNodesScreen();
     HeadlessDisplayDriver *displayDriverForTesting() const;
