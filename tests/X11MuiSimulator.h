@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 
 struct NodeRecord;
 class X11Driver;
@@ -25,6 +26,7 @@ class X11MuiSimulator
     void populateLegacyNodeFixtures(size_t count = 100, uint32_t seed = 42);
     void pumpUntilClosed();
     void pump(uint32_t elapsedMs = 10);
+    bool runNodeListHardwareBenchmark(uint32_t timeoutMs, bool tdeckConstrained, std::string &report);
     bool injectPointer(int16_t x, int16_t y, bool pressed);
     bool injectKeyboard(uint32_t key);
     bool injectEncoder(int16_t diff);
@@ -65,7 +67,9 @@ class X11MuiSimulator
     static void pointerReadCallback(lv_indev_t *indev, lv_indev_data_t *data);
     static void keyboardReadCallback(lv_indev_t *indev, lv_indev_data_t *data);
     static void encoderReadCallback(lv_indev_t *indev, lv_indev_data_t *data);
+    static void fallbackPointerReadCallback(lv_indev_t *indev, lv_indev_data_t *data);
 
+    bool ensurePointerInputForTesting();
     void scanInputs();
 
     DisplayDriverConfig config;
@@ -74,6 +78,7 @@ class X11MuiSimulator
     lv_indev_t *pointerInput;
     lv_indev_t *keyboardInput;
     lv_indev_t *encoderInput;
+    lv_indev_t *fixturePointerInput;
     lv_indev_read_cb_t originalPointerRead;
     lv_indev_read_cb_t originalKeyboardRead;
     lv_indev_read_cb_t originalEncoderRead;

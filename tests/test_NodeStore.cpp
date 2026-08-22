@@ -131,6 +131,57 @@ TEST_CASE("node store updates position telemetry and radio fields on an existing
     CHECK(record.hasActiveChat);
 }
 
+TEST_CASE("node store preserves legacy-visible position and battery fields across incomplete updates")
+{
+    NodeStore store;
+    store.upsertUnknown(7, 0, 10, meshtastic_Config_DeviceConfig_Role_CLIENT, false, false);
+
+    const NodePosition validPosition{true, 123456789, -987654321, 1234, 9, 22};
+    CHECK(store.updatePosition(7, validPosition).kind == NodeMutationKind::Updated);
+    CHECK(store.updatePosition(7, {true, 0, 0, 0, 0, 0}).kind == NodeMutationKind::Unchanged);
+    CHECK(store.find(7)->position.latitude == validPosition.latitude);
+    CHECK(store.find(7)->position.longitude == validPosition.longitude);
+
+    meshtastic_DeviceMetrics metrics = meshtastic_DeviceMetrics_init_default;
+    metrics.has_battery_level = true;
+    metrics.battery_level = 78;
+    metrics.has_voltage = true;
+    metrics.voltage = 4.12f;
+    metrics.has_channel_utilization = true;
+    metrics.channel_utilization = 12.5f;
+    metrics.has_air_util_tx = true;
+    metrics.air_util_tx = 3.2f;
+    CHECK(store.updateDeviceMetrics(7, metrics).kind == NodeMutationKind::Updated);
+
+    meshtastic_DeviceMetrics zeroBattery = meshtastic_DeviceMetrics_init_default;
+    zeroBattery.has_channel_utilization = true;
+    zeroBattery.channel_utilization = 0.0f;
+    zeroBattery.has_air_util_tx = true;
+    zeroBattery.air_util_tx = 0.0f;
+    CHECK(store.updateDeviceMetrics(7, zeroBattery).kind == NodeMutationKind::Updated);
+    REQUIRE(store.find(7) != nullptr);
+    CHECK(store.find(7)->deviceMetrics.battery_level == 78);
+    CHECK(store.find(7)->deviceMetrics.voltage == doctest::Approx(4.12f));
+    CHECK(store.find(7)->deviceMetrics.channel_utilization == doctest::Approx(0.0f));
+    CHECK(store.find(7)->deviceMetrics.air_util_tx == doctest::Approx(0.0f));
+}
+
+TEST_CASE("node store accepts positions on the equator and prime meridian")
+{
+    NodeStore store;
+    store.upsertUnknown(7, 0, 10, meshtastic_Config_DeviceConfig_Role_CLIENT, false, false);
+
+    CHECK(store.updatePosition(7, {true, 0, -987654321, 1234, 9, 22}).kind == NodeMutationKind::Updated);
+    CHECK(store.find(7)->position.latitude == 0);
+    CHECK(store.find(7)->position.longitude == -987654321);
+
+    CHECK(store.updatePosition(7, {true, 123456789, 0, 1234, 9, 22}).kind == NodeMutationKind::Updated);
+    CHECK(store.find(7)->position.latitude == 123456789);
+    CHECK(store.find(7)->position.longitude == 0);
+
+    CHECK(store.updatePosition(7, {true, 0, 0, 1234, 9, 22}).kind == NodeMutationKind::Unchanged);
+}
+
 TEST_CASE("node store treats RSSI after hops as direct and records bad PKI keys")
 {
     NodeStore store;
@@ -146,6 +197,42 @@ TEST_CASE("node store treats RSSI after hops as direct and records bad PKI keys"
     CHECK(store.markBadKey(7).kind == NodeMutationKind::Updated);
     CHECK(store.find(7)->hasBadKey);
     CHECK(store.markBadKey(7).kind == NodeMutationKind::Unchanged);
+}
+
+TEST_CASE("node store clears a bad-key marker when a replacement public key arrives")
+{
+    NodeStore store;
+    auto user = makeUser("NODE", "Node");
+    user.public_key.size = 32;
+    user.public_key.bytes[0] = 0x11;
+    store.upsertUser(7, 0, 10, user, false);
+    store.markBadKey(7);
+
+    user.public_key.bytes[0] = 0x22;
+    const NodeMutation mutation = store.upsertUser(7, 0, 10, user, false);
+
+    CHECK(mutation.kind == NodeMutationKind::Updated);
+    CHECK((mutation.changedFields & NodeFieldFlags) != 0U);
+    CHECK_FALSE(store.find(7)->hasBadKey);
+}
+
+TEST_CASE("node store retains a bad-key marker when same-key flags change")
+{
+    NodeStore store;
+    auto user = makeUser("NODE", "Node");
+    user.public_key.size = 32;
+    user.public_key.bytes[0] = 0x11;
+    store.upsertUser(7, 0, 10, user, false);
+    store.markBadKey(7);
+
+    user.has_is_unmessagable = true;
+    user.is_unmessagable = true;
+    store.upsertUser(7, 0, 10, user, false);
+    REQUIRE(store.find(7) != nullptr);
+    CHECK(store.find(7)->hasBadKey);
+
+    store.upsertUser(7, 0, 10, user, true);
+    CHECK(store.find(7)->hasBadKey);
 }
 
 TEST_CASE("node store field updates do not create incomplete nodes")

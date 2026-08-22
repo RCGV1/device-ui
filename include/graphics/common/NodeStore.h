@@ -16,6 +16,8 @@ struct NodePosition {
     int32_t altitude = 0;
     uint32_t satellites = 0;
     uint32_t precision = 0;
+
+    bool hasCoordinates() const { return known && (latitude != 0 || longitude != 0); }
 };
 
 enum class NodeSignalDisplayKind : uint8_t { None, Rssi, Hops };

@@ -24,6 +24,58 @@ HeadlessDisplayDriver &headlessDisplayDriver()
     static HeadlessDisplayDriver driver;
     return driver;
 }
+
+struct TestInputEvent {
+    uint32_t key = 0;
+    int16_t encoderDiff = 0;
+    bool pressed = false;
+};
+
+void testInputRead(lv_indev_t *input, lv_indev_data_t *data)
+{
+    *data = {};
+    const auto *event = static_cast<const TestInputEvent *>(lv_indev_get_user_data(input));
+    if (!event) {
+        return;
+    }
+    data->key = event->key;
+    data->enc_diff = event->encoderDiff;
+    data->state = event->pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+
+void dispatchTestKey(lv_indev_t *input, uint32_t key, bool longPress)
+{
+    if (!input) {
+        return;
+    }
+    TestInputEvent event{key, 0, true};
+    lv_indev_set_display(input, lv_display_get_default());
+    lv_indev_set_user_data(input, &event);
+    lv_indev_set_read_cb(input, testInputRead);
+    lv_indev_read(input);
+    if (longPress) {
+        lv_tick_inc(600);
+        lv_indev_read(input);
+    }
+    event.pressed = false;
+    lv_indev_read(input);
+    lv_indev_set_user_data(input, nullptr);
+}
+
+void dispatchTestEncoderDelta(lv_indev_t *input, int16_t diff)
+{
+    if (!input) {
+        return;
+    }
+    TestInputEvent event{0, diff, false};
+    lv_indev_set_display(input, lv_display_get_default());
+    lv_indev_set_user_data(input, &event);
+    lv_indev_set_read_cb(input, testInputRead);
+    lv_indev_read(input);
+    event.encoderDiff = 0;
+    lv_indev_read(input);
+    lv_indev_set_user_data(input, nullptr);
+}
 } // namespace
 
 MuiTestHarness::MuiTestHarness()
@@ -662,6 +714,30 @@ void MuiTestHarness::focusPreviousInVirtualGroup()
     pump();
 }
 
+void MuiTestHarness::dispatchKeyboardKey(uint32_t key, bool longPress)
+{
+    lv_indev_t *input = view->getInputDriver()->getKeyboard();
+    lv_indev_set_group(input, view->virtualNodeListNavigationGroupForTesting());
+    dispatchTestKey(input, key, longPress);
+    pump();
+}
+
+void MuiTestHarness::dispatchEncoderDelta(int16_t diff)
+{
+    lv_indev_t *input = view->getInputDriver()->getEncoder();
+    lv_indev_set_group(input, view->virtualNodeListNavigationGroupForTesting());
+    dispatchTestEncoderDelta(input, diff);
+    pump();
+}
+
+void MuiTestHarness::dispatchEncoderKey(uint32_t key, bool longPress)
+{
+    lv_indev_t *input = view->getInputDriver()->getEncoder();
+    lv_indev_set_group(input, view->virtualNodeListNavigationGroupForTesting());
+    dispatchTestKey(input, key, longPress);
+    pump();
+}
+
 lv_group_t *MuiTestHarness::virtualNavigationGroup() const
 {
     return view->virtualNodeListNavigationGroupForTesting();
@@ -748,6 +824,9 @@ MuiRowSnapshot MuiTestHarness::legacyRowSnapshot(uint32_t nodeId) const
             lv_obj_get_x(shortName),
             lv_obj_get_x(signal),
             lv_obj_get_y(signal),
+            lv_obj_get_width(row),
+            lv_obj_get_width(signal),
+            static_cast<int32_t>(lv_label_get_long_mode(signal)),
         };
     }
     return {};

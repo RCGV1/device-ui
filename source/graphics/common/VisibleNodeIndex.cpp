@@ -86,7 +86,7 @@ bool VisibleNodeIndex::isVisible(const NodeRecord &node, const NodeListFilter &f
 
     // Filter Position: require known coordinates
     if (filter.position) {
-        if (!node.position.known || (node.position.latitude == 0 && node.position.longitude == 0)) {
+        if (!node.position.hasCoordinates()) {
             return false;
         }
     }
@@ -114,6 +114,7 @@ bool VisibleNodeIndex::isVisible(const NodeRecord &node, const NodeListFilter &f
 
 void VisibleNodeIndex::rebuild(const NodeStore &store, const NodeListFilter &filter, NodeId ownNode, NodeListFilterPolicy policy)
 {
+    ++rebuildGeneration;
     visibleIds.clear();
     visibleIds.reserve(store.size());
 

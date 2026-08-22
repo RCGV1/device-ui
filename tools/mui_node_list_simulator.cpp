@@ -28,13 +28,22 @@ struct Options {
     uint32_t seed = 42;
     uint32_t runForMs = 0;
     bool exerciseX11Input = false;
+    bool hardwareBenchmark = false;
+    bool tdeckConstrained = false;
     std::string reportPath;
     std::string windowTitle;
 };
 
 constexpr std::string_view usage =
     "usage: mui_node_list_simulator --implementation legacy|virtual_candidate [--nodes N] [--seed N] [--run-for-ms N] "
-    "[--window-title TITLE] [--exercise-x11-input] [--report PATH]";
+    "[--window-title TITLE] [--exercise-x11-input] [--hardware-benchmark] [--tdeck-constrained] [--report PATH]";
+
+constexpr uint32_t tdeckModelDisplayWidth = 320;
+constexpr uint32_t tdeckModelDisplayHeight = 240;
+constexpr uint32_t tdeckModelUiPeriodMs = 40;
+constexpr uint32_t tdeckModelSpiHz = 40000000;
+constexpr uint32_t tdeckModelRgb565FrameBytes = tdeckModelDisplayWidth * tdeckModelDisplayHeight * 2;
+constexpr std::string_view tdeckModelFrameTransferMs = "30.72";
 
 const char *implementationName(X11MuiSimulator::Implementation implementation)
 {
@@ -63,6 +72,16 @@ bool parseOptions(int argc, char **argv, Options &options)
         uint64_t parsed = 0;
         if (flag == "--exercise-x11-input") {
             options.exerciseX11Input = true;
+            ++index;
+            continue;
+        }
+        if (flag == "--hardware-benchmark") {
+            options.hardwareBenchmark = true;
+            ++index;
+            continue;
+        }
+        if (flag == "--tdeck-constrained") {
+            options.tdeckConstrained = true;
             ++index;
             continue;
         }
@@ -389,7 +408,8 @@ X11ExerciseReport exerciseX11Input(X11MuiSimulator &simulator, const std::string
     return report;
 }
 
-bool writeReport(const Options &options, const X11MuiSimulator &simulator, const X11ExerciseReport &exercise)
+bool writeReport(const Options &options, const X11MuiSimulator &simulator, const X11ExerciseReport &exercise,
+                 const std::string &hardwareBenchmarkReport, bool hardwareBenchmarkComplete)
 {
     if (options.reportPath.empty()) {
         return true;
@@ -401,6 +421,21 @@ bool writeReport(const Options &options, const X11MuiSimulator &simulator, const
     output << "implementation=" << implementationName(options.implementation) << '\n';
     output << "virtual_enabled=" << (simulator.virtualNodeListEnabledForTesting() ? 1 : 0) << '\n';
     output << "rendered_nodes=" << simulator.renderedNodeCountForTesting() << '\n';
+    output << "tdeck_constrained=" << (options.tdeckConstrained ? 1 : 0) << '\n';
+    if (options.tdeckConstrained) {
+        output << "scope=tdeck-model constrained X11/LVGL simulator; not hardware timing\n";
+        output << "tdeck_model_display_width=" << tdeckModelDisplayWidth << '\n';
+        output << "tdeck_model_display_height=" << tdeckModelDisplayHeight << '\n';
+        output << "tdeck_model_ui_period_ms=" << tdeckModelUiPeriodMs << '\n';
+        output << "tdeck_model_spi_hz=" << tdeckModelSpiHz << '\n';
+        output << "tdeck_model_rgb565_frame_bytes=" << tdeckModelRgb565FrameBytes << '\n';
+        output << "tdeck_model_frame_transfer_ms=" << tdeckModelFrameTransferMs << '\n';
+    }
+    if (options.hardwareBenchmark) {
+        output << "hardware_benchmark_fixtures=250\n";
+        output << "hardware_benchmark_complete=" << (hardwareBenchmarkComplete ? 1 : 0) << '\n';
+        output << "hardware_benchmark_report=" << hardwareBenchmarkReport << '\n';
+    }
     output << "x11_display_opened=" << (exercise.openedDisplay ? 1 : 0) << '\n';
     output << "x11_window_found=" << (exercise.foundWindow ? 1 : 0) << '\n';
     output << "drag_sent=" << (exercise.dragSent ? 1 : 0) << '\n';
@@ -471,7 +506,9 @@ bool writeReport(const Options &options, const X11MuiSimulator &simulator, const
                    ? 1
                    : 0)
            << '\n';
-    output << "scope=host-relative X11/LVGL interaction; not hardware timing\n";
+    if (!options.tdeckConstrained) {
+        output << "scope=host-relative X11/LVGL interaction; not hardware timing\n";
+    }
     return true;
 }
 } // namespace
@@ -499,6 +536,8 @@ int main(int argc, char **argv)
     }
     simulator.populateLegacyNodeFixtures(options.nodes, options.seed);
     X11ExerciseReport exercise{};
+    std::string hardwareBenchmarkReport;
+    bool hardwareBenchmarkComplete = false;
     if (options.exerciseX11Input) {
         const std::string title = options.windowTitle.empty() ? "Meshtastic (320x240)" : options.windowTitle;
         exercise = exerciseX11Input(simulator, title);
@@ -514,14 +553,30 @@ int main(int argc, char **argv)
              exercise.clickFocusBefore == exercise.clickFocusAfter) ||
             (exercise.keyFocusBefore == exercise.keyFocusAfter && exercise.keySelectedBefore == exercise.keySelectedAfter &&
              exercise.keyScrollBefore == exercise.keyScrollAfter)) {
-            writeReport(options, simulator, exercise);
+            writeReport(options, simulator, exercise, hardwareBenchmarkReport, hardwareBenchmarkComplete);
             std::cerr << "failed to exercise X11 input through LVGL\n";
             return 1;
         }
     }
-    if (!writeReport(options, simulator, exercise)) {
+    if (options.hardwareBenchmark) {
+        const uint32_t benchmarkTimeoutMs = options.tdeckConstrained ? 60000U : 20000U;
+        hardwareBenchmarkComplete =
+            simulator.runNodeListHardwareBenchmark(benchmarkTimeoutMs, options.tdeckConstrained, hardwareBenchmarkReport);
+        if (!hardwareBenchmarkReport.empty()) {
+            std::cout << hardwareBenchmarkReport << '\n';
+        }
+        if (!hardwareBenchmarkComplete) {
+            writeReport(options, simulator, exercise, hardwareBenchmarkReport, hardwareBenchmarkComplete);
+            std::cerr << "failed to run node-list hardware benchmark through simulator\n";
+            return 1;
+        }
+    }
+    if (!writeReport(options, simulator, exercise, hardwareBenchmarkReport, hardwareBenchmarkComplete)) {
         std::cerr << "failed to write simulator report\n";
         return 1;
+    }
+    if (options.hardwareBenchmark) {
+        return 0;
     }
     if (options.runForMs > 0) {
         for (uint32_t elapsed = 0; elapsed < options.runForMs; elapsed += 10) {

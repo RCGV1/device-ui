@@ -4,6 +4,7 @@
 #include "Arduino.h"
 #include "graphics/common/BatteryLevel.h"
 #include "graphics/common/LoRaPresets.h"
+#include "graphics/common/NodeListRowPresentation.h"
 #include "graphics/common/Ringtones.h"
 #include "graphics/common/ViewController.h"
 #include "graphics/driver/DisplayDriver.h"
@@ -33,6 +34,14 @@
 #include <random>
 #include <sstream>
 #include <time.h>
+
+#ifdef ARDUINO_ARCH_ESP32
+#include <esp_heap_caps.h>
+#endif
+
+#if defined(DEVICE_UI_MUI_VIRTUAL_NODE_LIST) && defined(ARDUINO) && !defined(ARCH_PORTDUINO)
+void PowerFSM_notifyInput();
+#endif
 
 #if defined(ARCH_PORTDUINO)
 #include "PortduinoFS.h"
@@ -234,7 +243,7 @@ NodePosition TFTView_320x240::nodePosition(NodeId id) const
     NodePosition position{};
     position.latitude = static_cast<int32_t>(reinterpret_cast<intptr_t>(panel->LV_OBJ_IDX(node_pos1_idx)->user_data));
     position.longitude = static_cast<int32_t>(reinterpret_cast<intptr_t>(panel->LV_OBJ_IDX(node_pos2_idx)->user_data));
-    position.known = position.latitude != 0 && position.longitude != 0;
+    position.known = position.latitude != 0 || position.longitude != 0;
     if (position.known)
         position.altitude = static_cast<int32_t>(std::strtol(lv_label_get_text(panel->LV_OBJ_IDX(node_pos2_idx)), nullptr, 10));
     return position;
@@ -312,9 +321,650 @@ TFTView_320x240::TFTView_320x240(const DisplayDriverConfig *cfg, DisplayDriver *
 {
     filter.active = false;
     highlight.active = false;
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST_DEFAULT
+    nodeModelEnabled = true;
+    useVirtualNodeList = true;
+#endif
     objects.main_screen = nullptr;
     selectNode(0);
 }
+
+#if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH)
+void TFTView_320x240::startNodeListHardwareBenchmark()
+{
+    if (nodeListHardwareBenchmarkStarted) {
+        return;
+    }
+
+    nodeListHardwareBenchmarkStarted = true;
+    nodeListHardwareBenchmarkPrinted = false;
+    nodeListHardwareBenchmarkReportLine.clear();
+    nodeListHardwareBenchmarkSamples.fill(0);
+    nodeListHardwareBenchmarkSampleCount = 0;
+    nodeListHardwareBenchmarkGestureIndex = 0;
+    nodeListHardwareBenchmarkMovementCount = 0;
+    nodeListHardwareBenchmarkElapsedUs = 0;
+    nodeListHardwareBenchmarkRefreshStartUs = 0;
+    nodeListHardwareBenchmarkRefreshTotalUs = 0;
+    nodeListHardwareBenchmarkRefreshWorstUs = 0;
+    nodeListHardwareBenchmarkRefreshCount = 0;
+    nodeListHardwareBenchmarkPointerState = {};
+    nodeListHardwareBenchmarkGesture = {};
+    nodeListHardwareBenchmarkMemoryAfterCaptured = false;
+    nodeListHardwareBenchmarkFailureReason.clear();
+    nodeListHardwareBenchmarkReportLine.reserve(1024);
+    nodeListHardwareBenchmarkReplayStartMs = millis();
+    if (!nodeListHardwareBenchmarkRefreshEventsRegistered && displaydriver && displaydriver->getDisplay()) {
+        lv_display_add_event_cb(displaydriver->getDisplay(), nodeListHardwareBenchmarkRefreshEvent, LV_EVENT_ALL, this);
+        nodeListHardwareBenchmarkRefreshEventsRegistered = true;
+    }
+    nodeListHardwareBenchmarkState = NodeListHardwareBenchmarkState::ReplaySettle;
+    ILOG_INFO("MUI_NODE_LIST_HW_BENCH_STATE started");
+}
+
+void TFTView_320x240::nodeListHardwareBenchmarkRefreshEvent(lv_event_t *event)
+{
+    auto *view = static_cast<TFTView_320x240 *>(lv_event_get_user_data(event));
+    if (!view || view->nodeListHardwareBenchmarkState != NodeListHardwareBenchmarkState::MeasureForward) {
+        return;
+    }
+
+    if (lv_event_get_code(event) == LV_EVENT_REFR_START) {
+        view->nodeListHardwareBenchmarkRefreshStartUs = micros();
+    } else if (lv_event_get_code(event) == LV_EVENT_REFR_READY && view->nodeListHardwareBenchmarkRefreshStartUs != 0) {
+        const uint32_t durationUs = micros() - view->nodeListHardwareBenchmarkRefreshStartUs;
+        view->nodeListHardwareBenchmarkRefreshTotalUs += durationUs;
+        view->nodeListHardwareBenchmarkRefreshWorstUs = std::max(view->nodeListHardwareBenchmarkRefreshWorstUs, durationUs);
+        view->nodeListHardwareBenchmarkRefreshCount++;
+        view->nodeListHardwareBenchmarkRefreshStartUs = 0;
+    }
+}
+
+bool TFTView_320x240::nodeListHardwareBenchmarkComplete() const
+{
+    return nodeListHardwareBenchmarkState == NodeListHardwareBenchmarkState::Done;
+}
+
+const char *TFTView_320x240::nodeListHardwareBenchmarkReport() const
+{
+    return nodeListHardwareBenchmarkReportLine.c_str();
+}
+
+void TFTView_320x240::advanceNodeListHardwareBenchmark()
+{
+    if (!screensInitialised || nodeListHardwareBenchmarkState == NodeListHardwareBenchmarkState::Idle ||
+        nodeListHardwareBenchmarkState == NodeListHardwareBenchmarkState::Done) {
+        return;
+    }
+
+#if defined(ARDUINO) && !defined(ARCH_PORTDUINO)
+    PowerFSM_notifyInput();
+#endif
+
+    switch (nodeListHardwareBenchmarkState) {
+    case NodeListHardwareBenchmarkState::ReplaySettle:
+#ifndef UNIT_TEST
+        if (static_cast<uint32_t>(millis() - nodeListHardwareBenchmarkReplayStartMs) < 3000) {
+            break;
+        }
+#endif
+        nodeListHardwareBenchmarkState = NodeListHardwareBenchmarkState::SeedPending;
+        break;
+    case NodeListHardwareBenchmarkState::SeedPending:
+        ILOG_INFO("MUI_NODE_LIST_HW_BENCH_STATE seeding");
+        clearNodeListHardwareBenchmarkPresentation();
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+        useVirtualNodeList = true;
+#endif
+        seedNodeListHardwareBenchmarkFixtures();
+        ui_set_active(objects.nodes_button, objects.nodes_panel, objects.top_nodes_panel);
+        syncNodeListPresentation();
+#if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH_SEED_ONLY)
+        nodeListHardwareBenchmarkState = NodeListHardwareBenchmarkState::Report;
+        break;
+#endif
+        if (!registerNodeListHardwareBenchmarkPointer()) {
+            nodeListHardwareBenchmarkFailureReason = "no_lvgl_pointer";
+            ILOG_WARN("MUI_NODE_LIST_HW_BENCH_STATE no_lvgl_pointer");
+            nodeListHardwareBenchmarkState = NodeListHardwareBenchmarkState::Report;
+            break;
+        }
+        publishNodeListHardwareBenchmarkProgress();
+        nodeListHardwareBenchmarkState = NodeListHardwareBenchmarkState::Warmup;
+        break;
+    case NodeListHardwareBenchmarkState::Warmup:
+        if (nodeListHardwareBenchmarkGestureIndex >= nodeListHardwareBenchmarkWarmupGestures) {
+            nodeListHardwareBenchmarkGestureIndex = 0;
+            captureNodeListHardwareBenchmarkMemory(nodeListHardwareBenchmarkMemoryBefore);
+            nodeListHardwareBenchmarkStartUs = micros();
+            nodeListHardwareBenchmarkRefreshStartUs = 0;
+            nodeListHardwareBenchmarkRefreshTotalUs = 0;
+            nodeListHardwareBenchmarkRefreshWorstUs = 0;
+            nodeListHardwareBenchmarkRefreshCount = 0;
+            publishNodeListHardwareBenchmarkProgress();
+            nodeListHardwareBenchmarkState = NodeListHardwareBenchmarkState::MeasureForward;
+            break;
+        }
+        switch (advanceNodeListHardwareBenchmarkGesture(false, (nodeListHardwareBenchmarkGestureIndex % 2U) == 0U)) {
+        case NodeListHardwareBenchmarkGestureResult::Complete:
+            nodeListHardwareBenchmarkGestureIndex++;
+            break;
+        case NodeListHardwareBenchmarkGestureResult::Failed:
+            if (nodeListHardwareBenchmarkFailureReason.empty()) {
+                nodeListHardwareBenchmarkFailureReason = "gesture_injection_failed";
+            }
+            ILOG_WARN("MUI_NODE_LIST_HW_BENCH_STATE warmup_failed=%s", nodeListHardwareBenchmarkFailureReason.c_str());
+            nodeListHardwareBenchmarkState = NodeListHardwareBenchmarkState::Report;
+            break;
+        case NodeListHardwareBenchmarkGestureResult::Running:
+            break;
+        }
+        break;
+    case NodeListHardwareBenchmarkState::MeasureForward:
+        if (nodeListHardwareBenchmarkGestureIndex >= nodeListHardwareBenchmarkSampleTarget) {
+            nodeListHardwareBenchmarkElapsedUs = micros() - nodeListHardwareBenchmarkStartUs;
+            nodeListHardwareBenchmarkState = NodeListHardwareBenchmarkState::Report;
+            break;
+        }
+        switch (advanceNodeListHardwareBenchmarkGesture(true, (nodeListHardwareBenchmarkGestureIndex % 2U) == 0U)) {
+        case NodeListHardwareBenchmarkGestureResult::Complete:
+            nodeListHardwareBenchmarkGestureIndex++;
+            break;
+        case NodeListHardwareBenchmarkGestureResult::Failed:
+            if (nodeListHardwareBenchmarkFailureReason.empty()) {
+                nodeListHardwareBenchmarkFailureReason = "gesture_injection_failed";
+            }
+            ILOG_WARN("MUI_NODE_LIST_HW_BENCH_STATE measure_failed=%s", nodeListHardwareBenchmarkFailureReason.c_str());
+            nodeListHardwareBenchmarkState = NodeListHardwareBenchmarkState::Report;
+            break;
+        case NodeListHardwareBenchmarkGestureResult::Running:
+            break;
+        }
+        break;
+    case NodeListHardwareBenchmarkState::Report:
+        if (nodeListHardwareBenchmarkStartUs && !nodeListHardwareBenchmarkElapsedUs) {
+            nodeListHardwareBenchmarkElapsedUs = micros() - nodeListHardwareBenchmarkStartUs;
+        }
+        releaseNodeListHardwareBenchmarkPointer();
+        unregisterNodeListHardwareBenchmarkPointer();
+        if (!nodeListHardwareBenchmarkMemoryAfterCaptured) {
+            captureNodeListHardwareBenchmarkMemory(nodeListHardwareBenchmarkMemoryAfter);
+            nodeListHardwareBenchmarkMemoryAfterCaptured = true;
+        }
+        finishNodeListHardwareBenchmarkReport();
+        nodeListHardwareBenchmarkState = NodeListHardwareBenchmarkState::Done;
+        ILOG_INFO("MUI_NODE_LIST_HW_BENCH_STATE done");
+        break;
+    case NodeListHardwareBenchmarkState::Idle:
+    case NodeListHardwareBenchmarkState::Done:
+        break;
+    }
+}
+
+void TFTView_320x240::clearNodeListHardwareBenchmarkPresentation()
+{
+    removeSpinner();
+    while (!nodeObjects.empty()) {
+        removeFromMap(nodeObjects.begin()->first);
+    }
+
+    for (auto &entry : nodes) {
+        if (entry.second) {
+            lv_obj_delete(entry.second);
+        }
+    }
+    nodes.clear();
+
+    selectNode(0);
+    nodeCount = 0;
+    nodesOnline = 0;
+    nodesFiltered = 0;
+    nodesChanged = true;
+    processingFilter = false;
+    filter = {};
+    filter.active = false;
+    highlight = {};
+    highlight.active = false;
+    nodeStore = NodeStore();
+    visibleNodes = VisibleNodeIndex();
+    nodeModelEnabled = true;
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    useVirtualNodeList = true;
+    if (virtualNodeList) {
+        virtualNodeList.reset();
+    }
+    if (virtualNodeListHost && virtualNodeListHost != objects.nodes_panel) {
+        lv_obj_delete(virtualNodeListHost);
+    }
+    virtualNodeListHost = nullptr;
+#endif
+}
+
+void TFTView_320x240::seedNodeListHardwareBenchmarkFixtures()
+{
+    constexpr uint32_t fixtureEpoch = 1700000000U;
+    for (size_t index = 0; index < nodeListHardwareBenchmarkFixtureCount; ++index) {
+        char shortName[8]{};
+        char longName[32]{};
+        std::snprintf(shortName, sizeof(shortName), "B%03u", static_cast<unsigned>(index));
+        std::snprintf(longName, sizeof(longName), "Bench Node %03u", static_cast<unsigned>(index));
+        const uint32_t nodeId = 0x5e000000U + static_cast<uint32_t>(index);
+        const uint32_t lastHeard = fixtureEpoch - static_cast<uint32_t>(index);
+        const eRole role = (index % 5 == 0) ? eRole::router : eRole::client;
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+        meshtastic_User user = meshtastic_User_init_default;
+        std::strncpy(user.short_name, shortName, sizeof(user.short_name) - 1);
+        std::strncpy(user.long_name, longName, sizeof(user.long_name) - 1);
+        user.role = static_cast<meshtastic_Config_DeviceConfig_Role>(role);
+        user.public_key.size = 32;
+        nodeStore.upsertUser(nodeId, static_cast<uint8_t>(index % c_max_channels), lastHeard, user, false);
+#else
+        addNode(nodeId, static_cast<uint8_t>(index % c_max_channels), shortName, longName, lastHeard, role, true, false);
+#endif
+    }
+}
+
+bool TFTView_320x240::registerNodeListHardwareBenchmarkPointer()
+{
+    if (nodeListHardwareBenchmarkPointerRegistered) {
+        return true;
+    }
+
+    nodeListHardwareBenchmarkPointer = lv_indev_create();
+    if (!nodeListHardwareBenchmarkPointer) {
+        return false;
+    }
+
+    lv_indev_set_type(nodeListHardwareBenchmarkPointer, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_user_data(nodeListHardwareBenchmarkPointer, this);
+    lv_indev_set_read_cb(nodeListHardwareBenchmarkPointer, nodeListHardwareBenchmarkPointerRead);
+    nodeListHardwareBenchmarkPointerState = {};
+    nodeListHardwareBenchmarkPointerState.syntheticActive = true;
+    nodeListHardwareBenchmarkPointerRegistered = true;
+    return true;
+}
+
+void TFTView_320x240::unregisterNodeListHardwareBenchmarkPointer()
+{
+    if (!nodeListHardwareBenchmarkPointerRegistered || !nodeListHardwareBenchmarkPointer) {
+        return;
+    }
+
+    lv_indev_delete(nodeListHardwareBenchmarkPointer);
+    nodeListHardwareBenchmarkPointer = nullptr;
+    nodeListHardwareBenchmarkPointerState = {};
+    nodeListHardwareBenchmarkPointerRegistered = false;
+}
+
+void TFTView_320x240::captureNodeListHardwareBenchmarkMemory(NodeListHardwareBenchmarkMemory &memory) const
+{
+    lv_mem_monitor_t monitor{};
+    lv_mem_monitor(&monitor);
+    memory.lvglFree = static_cast<uint32_t>(monitor.free_size);
+    memory.lvglUsedPct = monitor.used_pct;
+#ifdef ARDUINO_ARCH_ESP32
+    memory.heapInternal = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    memory.heapPsram = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+#else
+    memory.heapInternal = 0;
+    memory.heapPsram = 0;
+#endif
+}
+
+void TFTView_320x240::nodeListHardwareBenchmarkPointerRead(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    auto *view = static_cast<TFTView_320x240 *>(lv_indev_get_user_data(indev));
+    if (!view) {
+        return;
+    }
+    if (!view->nodeListHardwareBenchmarkPointerState.pending) {
+        if (view->nodeListHardwareBenchmarkPointerState.syntheticActive) {
+            data->point = view->nodeListHardwareBenchmarkPointerState.point;
+            data->state = view->nodeListHardwareBenchmarkPointerState.pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+            return;
+        }
+        return;
+    }
+
+    data->point = view->nodeListHardwareBenchmarkPointerState.point;
+    data->state = view->nodeListHardwareBenchmarkPointerState.pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+    view->nodeListHardwareBenchmarkPointerState.lastDeliveredPoint = view->nodeListHardwareBenchmarkPointerState.point;
+    view->nodeListHardwareBenchmarkPointerState.lastDeliveredPressed = view->nodeListHardwareBenchmarkPointerState.pressed;
+    view->nodeListHardwareBenchmarkPointerState.hasLastDelivered = true;
+    view->nodeListHardwareBenchmarkPointerState.syntheticActive = true;
+    view->nodeListHardwareBenchmarkPointerState.pending = false;
+}
+
+lv_obj_t *TFTView_320x240::nodeListHardwareBenchmarkGestureTarget() const
+{
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    if (virtualNodeListHost) {
+        return virtualNodeListHost;
+    }
+#endif
+    return objects.nodes_panel;
+}
+
+bool TFTView_320x240::nodeListHardwareBenchmarkGestureArea(lv_area_t &area) const
+{
+    if (!objects.nodes_panel) {
+        return false;
+    }
+
+    lv_obj_update_layout(objects.nodes_panel);
+    lv_obj_get_content_coords(objects.nodes_panel, &area);
+    return area.x2 > area.x1 && area.y2 > area.y1;
+}
+
+bool TFTView_320x240::injectNodeListHardwareBenchmarkPointer(int16_t x, int16_t y, bool pressed)
+{
+    if (!nodeListHardwareBenchmarkPointer) {
+        return false;
+    }
+
+    nodeListHardwareBenchmarkPointerState.point.x = x;
+    nodeListHardwareBenchmarkPointerState.point.y = y;
+    nodeListHardwareBenchmarkPointerState.pressed = pressed;
+    nodeListHardwareBenchmarkPointerState.pending = true;
+    return true;
+}
+
+bool TFTView_320x240::releaseNodeListHardwareBenchmarkPointer()
+{
+    if (!nodeListHardwareBenchmarkPointerRegistered || !nodeListHardwareBenchmarkPointer ||
+        !nodeListHardwareBenchmarkPointerState.syntheticActive) {
+        nodeListHardwareBenchmarkPointerState.pressed = false;
+        nodeListHardwareBenchmarkPointerState.pending = false;
+        return true;
+    }
+
+    const lv_point_t releasePoint = nodeListHardwareBenchmarkPointerState.hasLastDelivered
+                                        ? nodeListHardwareBenchmarkPointerState.lastDeliveredPoint
+                                        : nodeListHardwareBenchmarkPointerState.point;
+    nodeListHardwareBenchmarkPointerState.point = releasePoint;
+    nodeListHardwareBenchmarkPointerState.pressed = false;
+    nodeListHardwareBenchmarkPointerState.pending = true;
+    return true;
+}
+
+TFTView_320x240::NodeListHardwareBenchmarkGestureResult TFTView_320x240::advanceNodeListHardwareBenchmarkGesture(bool measuring,
+                                                                                                                 bool dragUp)
+{
+    lv_obj_t *target = nodeListHardwareBenchmarkGestureTarget();
+    if (!target || !displaydriver || !displaydriver->getDisplay()) {
+        return NodeListHardwareBenchmarkGestureResult::Failed;
+    }
+
+    constexpr uint8_t steps = 8;
+    constexpr uint8_t releaseTraceIndex = steps + 1;
+    constexpr uint8_t settleFramesRequired = 3;
+    constexpr uint8_t maxSettleTicks = 20;
+    constexpr uint32_t cadenceMs = 16;
+    const uint32_t nowMs = lv_tick_get();
+
+    if (nodeListHardwareBenchmarkGesture.phase == NodeListHardwareBenchmarkGesturePhase::Idle) {
+        lv_area_t area{};
+        if (!nodeListHardwareBenchmarkGestureArea(area)) {
+            return NodeListHardwareBenchmarkGestureResult::Failed;
+        }
+
+        nodeListHardwareBenchmarkGesture = {};
+        nodeListHardwareBenchmarkGesture.phase = NodeListHardwareBenchmarkGesturePhase::Trace;
+        nodeListHardwareBenchmarkGesture.measuring = measuring;
+        nodeListHardwareBenchmarkGesture.dragUp = dragUp;
+        nodeListHardwareBenchmarkGesture.x = static_cast<int16_t>((area.x1 + area.x2) / 2);
+        nodeListHardwareBenchmarkGesture.startY = static_cast<int16_t>(dragUp ? area.y2 - 18 : area.y1 + 18);
+        nodeListHardwareBenchmarkGesture.endY = static_cast<int16_t>(dragUp ? area.y1 + 18 : area.y2 - 18);
+        nodeListHardwareBenchmarkGesture.startUs = micros();
+        nodeListHardwareBenchmarkGesture.lastStepMs = nowMs - cadenceMs;
+        nodeListHardwareBenchmarkGesture.startScrollY = lv_obj_get_scroll_y(target);
+        nodeListHardwareBenchmarkGesture.endScrollY = nodeListHardwareBenchmarkGesture.startScrollY;
+        nodeListHardwareBenchmarkGesture.movementExpected =
+            dragUp ? lv_obj_get_scroll_bottom(target) > 0 : nodeListHardwareBenchmarkGesture.startScrollY > 0;
+        if (nodeListHardwareBenchmarkGesture.startY == nodeListHardwareBenchmarkGesture.endY) {
+            nodeListHardwareBenchmarkGesture.phase = NodeListHardwareBenchmarkGesturePhase::Idle;
+            return NodeListHardwareBenchmarkGestureResult::Failed;
+        }
+    }
+
+    if (nodeListHardwareBenchmarkGesture.phase == NodeListHardwareBenchmarkGesturePhase::Trace) {
+        if (static_cast<uint32_t>(nowMs - nodeListHardwareBenchmarkGesture.lastStepMs) < cadenceMs) {
+            return NodeListHardwareBenchmarkGestureResult::Running;
+        }
+        nodeListHardwareBenchmarkGesture.lastStepMs = nowMs;
+        const uint8_t traceIndex = nodeListHardwareBenchmarkGesture.traceIndex;
+        const bool pressed = traceIndex < releaseTraceIndex;
+        const int16_t y =
+            pressed
+                ? static_cast<int16_t>(
+                      nodeListHardwareBenchmarkGesture.startY +
+                      ((nodeListHardwareBenchmarkGesture.endY - nodeListHardwareBenchmarkGesture.startY) * traceIndex) / steps)
+                : nodeListHardwareBenchmarkGesture.endY;
+        if (!injectNodeListHardwareBenchmarkPointer(nodeListHardwareBenchmarkGesture.x, y, pressed)) {
+            releaseNodeListHardwareBenchmarkPointer();
+            return NodeListHardwareBenchmarkGestureResult::Failed;
+        }
+        nodeListHardwareBenchmarkGesture.traceIndex++;
+        if (!pressed) {
+            nodeListHardwareBenchmarkGesture.phase = NodeListHardwareBenchmarkGesturePhase::Settle;
+            nodeListHardwareBenchmarkGesture.lastScrollY = lv_obj_get_scroll_y(target);
+        }
+        return NodeListHardwareBenchmarkGestureResult::Running;
+    }
+
+    if (nodeListHardwareBenchmarkGesture.phase == NodeListHardwareBenchmarkGesturePhase::Settle) {
+        if (nodeListHardwareBenchmarkGesture.finalRefreshDone) {
+            const bool moved = nodeListHardwareBenchmarkGesture.endScrollY != nodeListHardwareBenchmarkGesture.startScrollY;
+            if (nodeListHardwareBenchmarkGesture.movementExpected && !moved) {
+                nodeListHardwareBenchmarkFailureReason = "no_scroll_movement";
+                return NodeListHardwareBenchmarkGestureResult::Failed;
+            }
+            if (nodeListHardwareBenchmarkGesture.measuring &&
+                nodeListHardwareBenchmarkSampleCount < nodeListHardwareBenchmarkSamples.size()) {
+                if (moved) {
+                    nodeListHardwareBenchmarkMovementCount++;
+                }
+                nodeListHardwareBenchmarkSamples[nodeListHardwareBenchmarkSampleCount++] =
+                    micros() - nodeListHardwareBenchmarkGesture.startUs;
+                if (nodeListHardwareBenchmarkSampleCount % 10U == 0U) {
+                    publishNodeListHardwareBenchmarkProgress();
+                }
+            }
+            nodeListHardwareBenchmarkGesture.phase = NodeListHardwareBenchmarkGesturePhase::Idle;
+            return NodeListHardwareBenchmarkGestureResult::Complete;
+        }
+
+        if (static_cast<uint32_t>(nowMs - nodeListHardwareBenchmarkGesture.lastStepMs) < cadenceMs) {
+            return NodeListHardwareBenchmarkGestureResult::Running;
+        }
+        nodeListHardwareBenchmarkGesture.lastStepMs = nowMs;
+        nodeListHardwareBenchmarkGesture.settleTicks++;
+        const int32_t scrollY = lv_obj_get_scroll_y(target);
+        if (scrollY == nodeListHardwareBenchmarkGesture.lastScrollY) {
+            nodeListHardwareBenchmarkGesture.stableFrames++;
+        } else {
+            nodeListHardwareBenchmarkGesture.stableFrames = 0;
+            nodeListHardwareBenchmarkGesture.lastScrollY = scrollY;
+        }
+        if (nodeListHardwareBenchmarkGesture.stableFrames >= settleFramesRequired && !lv_obj_is_scrolling(target)) {
+            nodeListHardwareBenchmarkGesture.finalRefreshDone = true;
+            releaseNodeListHardwareBenchmarkPointer();
+            nodeListHardwareBenchmarkGesture.endScrollY = lv_obj_get_scroll_y(target);
+            return NodeListHardwareBenchmarkGestureResult::Running;
+        }
+        if (nodeListHardwareBenchmarkGesture.settleTicks > maxSettleTicks) {
+            nodeListHardwareBenchmarkFailureReason = "settle_timeout";
+            releaseNodeListHardwareBenchmarkPointer();
+            return NodeListHardwareBenchmarkGestureResult::Failed;
+        }
+        return NodeListHardwareBenchmarkGestureResult::Running;
+    }
+
+    return NodeListHardwareBenchmarkGestureResult::Failed;
+}
+
+void TFTView_320x240::publishNodeListHardwareBenchmarkProgress()
+{
+    uint32_t totalUs = 0;
+    uint32_t worstUs = 0;
+    for (size_t index = 0; index < nodeListHardwareBenchmarkSampleCount; ++index) {
+        totalUs += nodeListHardwareBenchmarkSamples[index];
+        worstUs = std::max(worstUs, nodeListHardwareBenchmarkSamples[index]);
+    }
+
+    std::array<uint32_t, nodeListHardwareBenchmarkMaxSamples> sorted = nodeListHardwareBenchmarkSamples;
+    std::sort(sorted.begin(), sorted.begin() + static_cast<std::ptrdiff_t>(nodeListHardwareBenchmarkSampleCount));
+    const uint32_t p95Us =
+        nodeListHardwareBenchmarkSampleCount > 0 ? sorted[(nodeListHardwareBenchmarkSampleCount * 95U - 1U) / 100U] : 0;
+    const uint32_t elapsedUs = nodeListHardwareBenchmarkStartUs ? micros() - nodeListHardwareBenchmarkStartUs : 0;
+    const uint32_t avgGestureUs =
+        nodeListHardwareBenchmarkSampleCount > 0 ? totalUs / static_cast<uint32_t>(nodeListHardwareBenchmarkSampleCount) : 0;
+    char report[160]{};
+    std::snprintf(report, sizeof(report),
+                  "MUI_NODE_LIST_HW_BENCH_PROGRESS {\"m\":\"%s\",\"n\":%u,\"a\":%u,\"p\":%u,\"w\":%u,\"t\":%u}",
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+                  "virtual",
+#else
+                  "legacy",
+#endif
+                  static_cast<unsigned>(nodeListHardwareBenchmarkSampleCount), avgGestureUs, p95Us, worstUs, elapsedUs);
+    nodeListHardwareBenchmarkReportLine = report;
+    ILOG_INFO("%s", nodeListHardwareBenchmarkReportLine.c_str());
+}
+
+void TFTView_320x240::finishNodeListHardwareBenchmarkReport()
+{
+    if (nodeListHardwareBenchmarkPrinted) {
+        return;
+    }
+
+    uint32_t totalUs = 0;
+    uint32_t worstUs = 0;
+    for (size_t index = 0; index < nodeListHardwareBenchmarkSampleCount; ++index) {
+        totalUs += nodeListHardwareBenchmarkSamples[index];
+        worstUs = std::max(worstUs, nodeListHardwareBenchmarkSamples[index]);
+    }
+
+    std::array<uint32_t, nodeListHardwareBenchmarkMaxSamples> sorted = nodeListHardwareBenchmarkSamples;
+    std::sort(sorted.begin(), sorted.begin() + static_cast<std::ptrdiff_t>(nodeListHardwareBenchmarkSampleCount));
+    uint32_t p95Us = 0;
+    if (nodeListHardwareBenchmarkSampleCount > 0) {
+        const size_t p95Index = (nodeListHardwareBenchmarkSampleCount * 95U - 1U) / 100U;
+        p95Us = sorted[p95Index];
+    }
+
+    const uint32_t avgGestureUs =
+        nodeListHardwareBenchmarkSampleCount > 0 ? totalUs / static_cast<uint32_t>(nodeListHardwareBenchmarkSampleCount) : 0;
+    char report[160]{};
+    std::snprintf(report, sizeof(report),
+                  "MUI_NODE_LIST_HW_BENCH {\"m\":\"%s\",\"n\":%u,\"a\":%u,\"p\":%u,\"w\":%u,\"t\":%u,\"e\":\"%s\"}",
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+                  "virtual",
+#else
+                  "legacy",
+#endif
+                  static_cast<unsigned>(nodeListHardwareBenchmarkSampleCount), avgGestureUs, p95Us, worstUs,
+                  nodeListHardwareBenchmarkElapsedUs,
+                  nodeListHardwareBenchmarkFailureReason.empty() ? "none" : nodeListHardwareBenchmarkFailureReason.c_str());
+    nodeListHardwareBenchmarkReportLine = report;
+    ILOG_INFO("%s", nodeListHardwareBenchmarkReportLine.c_str());
+    ILOG_INFO("MUI_NODE_LIST_HW_BENCH_MEM {\"m\":\"%s\",\"lv\":%u,\"in\":%u,\"ps\":%u}",
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+              "virtual",
+#else
+              "legacy",
+#endif
+              nodeListHardwareBenchmarkMemoryAfter.lvglFree, nodeListHardwareBenchmarkMemoryAfter.heapInternal,
+              nodeListHardwareBenchmarkMemoryAfter.heapPsram);
+    ILOG_INFO("MUI_NODE_LIST_HW_BENCH_FRAME {\"m\":\"%s\",\"n\":%u,\"a\":%u,\"w\":%u}",
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+              "virtual",
+#else
+              "legacy",
+#endif
+              static_cast<unsigned>(nodeListHardwareBenchmarkRefreshCount),
+              nodeListHardwareBenchmarkRefreshCount > 0
+                  ? nodeListHardwareBenchmarkRefreshTotalUs / nodeListHardwareBenchmarkRefreshCount
+                  : 0,
+              nodeListHardwareBenchmarkRefreshWorstUs);
+    nodeListHardwareBenchmarkPrinted = true;
+}
+#endif
+
+#if defined(DEVICE_UI_MUI_VIRTUAL_NODE_LIST) && defined(DEVICE_UI_MUI_NODE_LIST_DEMO_FIXTURES)
+void TFTView_320x240::startNodeListDemoFixtures()
+{
+    if (nodeListDemoFixturesStarted) {
+        return;
+    }
+
+    NodeStore realNodes = std::move(nodeStore);
+    clearNodeListHardwareBenchmarkPresentation();
+    nodeStore = std::move(realNodes);
+    nodeModelEnabled = true;
+    useVirtualNodeList = true;
+    seedNodeListHardwareBenchmarkFixtures();
+    ui_set_active(objects.nodes_button, objects.nodes_panel, objects.top_nodes_panel);
+    syncNodeListPresentation();
+    nodeListDemoFixturesStarted = true;
+}
+#endif
+
+#if defined(DEVICE_UI_MUI_VIRTUAL_NODE_LIST) && defined(DEVICE_UI_MUI_NODE_LIST_DEMO_FIXTURES) &&                                \
+    !defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH)
+void TFTView_320x240::clearNodeListHardwareBenchmarkPresentation()
+{
+    removeSpinner();
+    for (auto &entry : nodes) {
+        if (entry.second) {
+            lv_obj_delete(entry.second);
+        }
+    }
+    nodes.clear();
+    selectNode(0);
+    nodeCount = 0;
+    nodesOnline = 0;
+    nodesFiltered = 0;
+    nodesChanged = true;
+    processingFilter = false;
+    filter = {};
+    filter.active = false;
+    highlight = {};
+    highlight.active = false;
+    nodeStore = NodeStore();
+    visibleNodes = VisibleNodeIndex();
+    nodeModelEnabled = true;
+    useVirtualNodeList = true;
+    virtualNodeList.reset();
+    if (virtualNodeListHost && virtualNodeListHost != objects.nodes_panel) {
+        lv_obj_delete(virtualNodeListHost);
+    }
+    virtualNodeListHost = nullptr;
+}
+
+void TFTView_320x240::seedNodeListHardwareBenchmarkFixtures()
+{
+    constexpr uint32_t fixtureEpoch = 1700000000U;
+    constexpr size_t fixtureCount = 250;
+    for (size_t index = 0; index < fixtureCount && nodeStore.size() < fixtureCount; ++index) {
+        char shortName[8]{};
+        char longName[32]{};
+        std::snprintf(shortName, sizeof(shortName), "B%03u", static_cast<unsigned>(index));
+        std::snprintf(longName, sizeof(longName), "Bench Node %03u", static_cast<unsigned>(index));
+        const uint32_t nodeId = 0x5e000000U + static_cast<uint32_t>(index);
+        const uint32_t lastHeard = fixtureEpoch - static_cast<uint32_t>(index);
+        const eRole role = (index % 5 == 0) ? eRole::router : eRole::client;
+        meshtastic_User user = meshtastic_User_init_default;
+        std::strncpy(user.short_name, shortName, sizeof(user.short_name) - 1);
+        std::strncpy(user.long_name, longName, sizeof(user.long_name) - 1);
+        user.role = static_cast<meshtastic_Config_DeviceConfig_Role>(role);
+        user.public_key.size = 32;
+        if (!nodeStore.find(nodeId)) {
+            nodeStore.upsertUser(nodeId, static_cast<uint8_t>(index % c_max_channels), lastHeard, user, false);
+        }
+    }
+}
+#endif
 
 #ifdef UNIT_TEST
 lv_obj_t *TFTView_320x240::nodeListRootForTesting(void) const
@@ -367,6 +1017,7 @@ void TFTView_320x240::resetNodeListForTesting(void)
     chats.clear();
     updateActiveChats();
     selectNode(0);
+    ownNode = 0;
 
     nodeCount = 0;
     nodesOnline = 0;
@@ -387,10 +1038,15 @@ void TFTView_320x240::resetNodeListForTesting(void)
     if (virtualNodeList) {
         virtualNodeList.reset();
     }
-    if (virtualNodeListHost) {
+    if (virtualNodeListHost && virtualNodeListHost != objects.nodes_panel) {
         lv_obj_delete(virtualNodeListHost);
-        virtualNodeListHost = nullptr;
     }
+    virtualNodeListHost = nullptr;
+    lv_obj_remove_flag(objects.node_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_layout(objects.nodes_panel, LV_LAYOUT_FLEX, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_flex_flow(objects.nodes_panel, LV_FLEX_FLOW_COLUMN, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_scrollbar_mode(objects.nodes_panel, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_scroll_to_y(objects.nodes_panel, 0, LV_ANIM_OFF);
 #endif
     nodeModelEnabled = false;
     updateNodesStatus();
@@ -747,8 +1403,7 @@ void TFTView_320x240::enableVirtualNodeModelForTesting()
 void TFTView_320x240::setActiveChatForTesting(NodeId id, bool active)
 {
     if (shouldMaintainNodeModel()) {
-        nodeStore.setActiveChat(id, active);
-        syncNodeListPresentation();
+        syncNodeListPresentation(nodeStore.setActiveChat(id, active));
     }
 }
 
@@ -1139,10 +1794,6 @@ void TFTView_320x240::ui_set_active(lv_obj_t *b, lv_obj_t *p, lv_obj_t *tp)
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
     if (useVirtualNodeList && p == objects.nodes_panel) {
         ensureVirtualNodeList();
-        if (virtualNodeListHost) {
-            lv_obj_remove_flag(virtualNodeListHost, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_move_foreground(virtualNodeListHost);
-        }
     }
 #endif
 
@@ -1166,6 +1817,8 @@ void TFTView_320x240::ui_set_active(lv_obj_t *b, lv_obj_t *p, lv_obj_t *tp)
                 virtualNodeList->focus(currentNode);
             } else if (!visibleNodes.ids().empty()) {
                 virtualNodeList->focus(visibleNodes.ids().front());
+            } else {
+                nodeFocusBoundary(true);
             }
         } else
 #endif
@@ -3121,7 +3774,7 @@ void TFTView_320x240::ui_event_positionButton(lv_event_t *e)
     // navigate to position in map
     uint32_t nodeNum = (unsigned long)e->user_data;
     const NodePosition position = THIS->nodePosition(nodeNum);
-    if (position.known && position.latitude && position.longitude) {
+    if (position.hasCoordinates()) {
         THIS->ui_set_active(objects.map_button, objects.map_panel, objects.top_map_panel);
         if (!THIS->map) {
             THIS->loadMap();
@@ -4561,9 +5214,10 @@ void TFTView_320x240::eraseChat(uint32_t channelOrNode)
         lv_obj_del(messages.at(nodeNum));
         messages.erase(nodeNum);
         chats.erase(nodeNum);
+        NodeMutation mutation{};
         if (shouldMaintainNodeModel())
-            nodeStore.setActiveChat(nodeNum, false);
-        syncNodeListPresentation();
+            mutation = nodeStore.setActiveChat(nodeNum, false);
+        syncNodeListPresentation(mutation);
     }
 }
 
@@ -5330,6 +5984,13 @@ void TFTView_320x240::addMessage(lv_obj_t *container, uint32_t msgTime, uint32_t
 void TFTView_320x240::addNode(uint32_t nodeNum, uint8_t ch, const char *userShort, const char *userLong, uint32_t lastHeard,
                               eRole role, bool hasKey, bool unmessagable)
 {
+#if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH)
+    if (nodeListHardwareBenchmarkState != NodeListHardwareBenchmarkState::Idle &&
+        nodeListHardwareBenchmarkState != NodeListHardwareBenchmarkState::Done &&
+        (nodeNum < 0x5e000000U || nodeNum >= 0x5e000000U + nodeListHardwareBenchmarkFixtureCount)) {
+        return;
+    }
+#endif
     // lv_obj nodesPanel children  |  user data (4 bytes)
     // ==================================================
     // [0]: img                    | role
@@ -5357,6 +6018,7 @@ void TFTView_320x240::addNode(uint32_t nodeNum, uint8_t ch, const char *userShor
 
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
     if (useVirtualNodeList) {
+        NodeMutation mutation{};
         if (!nodeStore.find(nodeNum) && nodeStore.size() >= MAX_NUM_NODES_VIEW && !nodePurgeCandidate(nodeNum)) {
             syncNodeListPresentation();
             return;
@@ -5379,9 +6041,9 @@ void TFTView_320x240::addNode(uint32_t nodeNum, uint8_t ch, const char *userShor
             }
             userRecord.has_is_unmessagable = true;
             userRecord.is_unmessagable = unmessagable;
-            nodeStore.upsertUser(nodeNum, ch, modelLastHeard, userRecord, false);
+            mutation = nodeStore.upsertUser(nodeNum, ch, modelLastHeard, userRecord, false);
         }
-        syncNodeListPresentation();
+        syncNodeListPresentation(mutation);
         return;
     }
 #endif
@@ -5611,6 +6273,7 @@ void TFTView_320x240::addOrUpdateNode(uint32_t nodeNum, uint8_t channel, uint32_
                                       bool viaMqtt)
 {
     MeshtasticView::addOrUpdateNode(nodeNum, channel, lastHeard, role, hasKey, viaMqtt);
+    NodeMutation mutation{};
     if (shouldMaintainNodeModel()) {
         const uint32_t modelLastHeard =
             lastHeard && curtime && lastHeard > static_cast<uint32_t>(curtime) ? static_cast<uint32_t>(curtime) : lastHeard;
@@ -5618,18 +6281,20 @@ void TFTView_320x240::addOrUpdateNode(uint32_t nodeNum, uint8_t channel, uint32_
             syncNodeListPresentation();
             return;
         }
-        nodeStore.upsertUnknown(nodeNum, channel, modelLastHeard, static_cast<uint8_t>(role), hasKey, viaMqtt);
+        mutation = nodeStore.upsertUnknown(nodeNum, channel, modelLastHeard, static_cast<uint8_t>(role), hasKey, viaMqtt);
         while (nodeStore.size() > MAX_NUM_NODES_VIEW) {
             if (!nodePurgeCandidate(nodeNum))
                 break;
             purgeNode(nodeNum);
         }
     }
-    syncNodeListPresentation();
+    syncNodeListPresentation(mutation);
 }
 
 void TFTView_320x240::addOrUpdateNode(uint32_t nodeNum, uint8_t channel, uint32_t lastHeard, const meshtastic_User &cfg)
 {
+    NodeMutation mutation{};
+    const bool legacyNodeExists = nodes.find(nodeNum) != nodes.end();
     if (shouldMaintainNodeModel()) {
         const uint32_t modelLastHeard =
             lastHeard && curtime && lastHeard > static_cast<uint32_t>(curtime) ? static_cast<uint32_t>(curtime) : lastHeard;
@@ -5637,20 +6302,26 @@ void TFTView_320x240::addOrUpdateNode(uint32_t nodeNum, uint8_t channel, uint32_
             syncNodeListPresentation();
             return;
         }
-        nodeStore.upsertUser(nodeNum, channel, modelLastHeard, cfg, false);
+        mutation = nodeStore.upsertUser(nodeNum, channel, modelLastHeard, cfg, false);
         while (nodeStore.size() > MAX_NUM_NODES_VIEW) {
             if (!nodePurgeCandidate(nodeNum))
                 break;
             purgeNode(nodeNum);
         }
     }
-    if (nodes.find(nodeNum) == nodes.end()) {
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    if (useVirtualNodeList) {
+        syncNodeListPresentation(mutation);
+        return;
+    }
+#endif
+    if (!legacyNodeExists) {
         addNode(nodeNum, channel, cfg.short_name, cfg.long_name, lastHeard, (MeshtasticView::eRole)cfg.role,
                 cfg.public_key.size != 0, cfg.has_is_unmessagable && cfg.is_unmessagable);
     } else {
         updateNode(nodeNum, channel, cfg);
+        syncNodeListPresentation(mutation);
     }
-    syncNodeListPresentation();
 }
 
 /**
@@ -5670,8 +6341,9 @@ void TFTView_320x240::updateNode(uint32_t nodeNum, uint8_t ch, const meshtastic_
 {
     const auto *existing = shouldMaintainNodeModel() ? nodeStore.find(nodeNum) : nullptr;
     uint32_t lh = existing ? existing->lastHeard : curtime;
+    NodeMutation mutation{};
     if (shouldMaintainNodeModel())
-        nodeStore.upsertUser(nodeNum, ch, lh, cfg, false);
+        mutation = nodeStore.upsertUser(nodeNum, ch, lh, cfg, false);
     db.user = cfg;
     auto it = nodes.find(nodeNum);
     if (it != nodes.end() && it->second) {
@@ -5730,13 +6402,14 @@ void TFTView_320x240::updateNode(uint32_t nodeNum, uint8_t ch, const meshtastic_
             lv_label_set_text(ct->second->spec_attr->children[0], buf);
         }
     }
-    syncNodeListPresentation();
+    syncNodeListPresentation(mutation);
 }
 
 void TFTView_320x240::updatePosition(uint32_t nodeNum, int32_t lat, int32_t lon, int32_t alt, uint32_t sats, uint32_t precision)
 {
+    NodeMutation mutation{};
     if (shouldMaintainNodeModel())
-        nodeStore.updatePosition(nodeNum, {true, lat, lon, alt, sats, precision});
+        mutation = nodeStore.updatePosition(nodeNum, {true, lat, lon, alt, sats, precision});
     int32_t altU = abs(alt) < 10000 ? alt : 0;
     char units[3] = {};
     if (db.config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_METRIC) {
@@ -5771,7 +6444,7 @@ void TFTView_320x240::updatePosition(uint32_t nodeNum, int32_t lat, int32_t lon,
 
         lv_label_set_text(objects.home_location_label, buf);
 
-        if (lat != 0 && lon != 0) {
+        if (lat != 0 || lon != 0) {
             hasPosition = true;
             myLatitude = lat;
             myLongitude = lon;
@@ -5782,7 +6455,7 @@ void TFTView_320x240::updatePosition(uint32_t nodeNum, int32_t lat, int32_t lon,
                 if (it.first != ownNode) {
                     int32_t nlat = (long)it.second->LV_OBJ_IDX(node_pos1_idx)->user_data;
                     int32_t nlon = (long)it.second->LV_OBJ_IDX(node_pos2_idx)->user_data;
-                    if (nlat != 0 && nlon != 0) {
+                    if (nlat != 0 || nlon != 0) {
                         updateDistance(it.first, nlat, nlon);
                     }
                 }
@@ -5818,7 +6491,7 @@ void TFTView_320x240::updatePosition(uint32_t nodeNum, int32_t lat, int32_t lon,
     }
 
     applyNodesFilter(nodeNum);
-    syncNodeListPresentation();
+    syncNodeListPresentation(mutation);
 }
 
 void TFTView_320x240::updateDistance(uint32_t nodeNum, int32_t lat, int32_t lon)
@@ -5875,8 +6548,9 @@ void TFTView_320x240::updateMetrics(uint32_t nodeNum, uint32_t bat_level, float 
     devMetrics.voltage = voltage;
     devMetrics.channel_utilization = chUtil;
     devMetrics.air_util_tx = airUtil;
+    NodeMutation mutation{};
     if (shouldMaintainNodeModel())
-        nodeStore.updateDeviceMetrics(nodeNum, devMetrics);
+        mutation = nodeStore.updateDeviceMetrics(nodeNum, devMetrics);
 
     auto it = nodes.find(nodeNum);
     if (it != nodes.end()) {
@@ -5941,13 +6615,14 @@ void TFTView_320x240::updateMetrics(uint32_t nodeNum, uint32_t bat_level, float 
             lv_obj_remove_flag(it->second->LV_OBJ_IDX(node_bat_idx), LV_OBJ_FLAG_HIDDEN);
         }
     }
-    syncNodeListPresentation();
+    syncNodeListPresentation(mutation);
 }
 
 void TFTView_320x240::updateEnvironmentMetrics(uint32_t nodeNum, const meshtastic_EnvironmentMetrics &metrics)
 {
+    NodeMutation mutation{};
     if (shouldMaintainNodeModel())
-        nodeStore.updateEnvironmentMetrics(nodeNum, metrics);
+        mutation = nodeStore.updateEnvironmentMetrics(nodeNum, metrics);
     auto it = nodes.find(nodeNum);
     if (it != nodes.end()) {
         char buf[50];
@@ -5977,13 +6652,14 @@ void TFTView_320x240::updateEnvironmentMetrics(uint32_t nodeNum, const meshtasti
         }
         applyNodesFilter(nodeNum);
     }
-    syncNodeListPresentation();
+    syncNodeListPresentation(mutation);
 }
 
 void TFTView_320x240::updateAirQualityMetrics(uint32_t nodeNum, const meshtastic_AirQualityMetrics &metrics)
 {
+    NodeMutation mutation{};
     if (shouldMaintainNodeModel())
-        nodeStore.updateAirQualityMetrics(nodeNum, metrics);
+        mutation = nodeStore.updateAirQualityMetrics(nodeNum, metrics);
     auto it = nodes.find(nodeNum);
     if (it != nodes.end() && it->first != ownNode) {
         // TODO
@@ -5991,7 +6667,7 @@ void TFTView_320x240::updateAirQualityMetrics(uint32_t nodeNum, const meshtastic
         // sprintf(buf, "%d %d", metrics.particles_03um, metrics.pm100_environmental);
         // lv_label_set_text(it->second->LV_OBJ_IDX(node_tm2_idx), buf);
     }
-    syncNodeListPresentation();
+    syncNodeListPresentation(mutation);
 }
 
 void TFTView_320x240::updatePowerMetrics(uint32_t nodeNum, const meshtastic_PowerMetrics &metrics)
@@ -6003,6 +6679,11 @@ void TFTView_320x240::updatePowerMetrics(uint32_t nodeNum, const meshtastic_Powe
         // sprintf(buf, "%0.1fmA %0.2fV", metrics.ch1_current, metrics.ch1_voltage);
         // lv_label_set_text(it->second->LV_OBJ_IDX(node_tm2_idx), buf);
     }
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    if (useVirtualNodeList) {
+        return;
+    }
+#endif
     syncNodeListPresentation();
 }
 
@@ -6011,8 +6692,9 @@ void TFTView_320x240::updatePowerMetrics(uint32_t nodeNum, const meshtastic_Powe
  */
 void TFTView_320x240::updateSignalStrength(uint32_t nodeNum, int32_t rssi, float snr)
 {
+    NodeMutation mutation{};
     if (shouldMaintainNodeModel())
-        nodeStore.updateSignal(nodeNum, rssi, snr);
+        mutation = nodeStore.updateSignal(nodeNum, rssi, snr);
     if (nodeNum != ownNode) {
         auto it = nodes.find(nodeNum);
         if (it != nodes.end()) {
@@ -6027,13 +6709,14 @@ void TFTView_320x240::updateSignalStrength(uint32_t nodeNum, int32_t rssi, float
             lv_obj_remove_flag(it->second->LV_OBJ_IDX(node_sig_idx), LV_OBJ_FLAG_HIDDEN);
         }
     }
-    syncNodeListPresentation();
+    syncNodeListPresentation(mutation);
 }
 
 void TFTView_320x240::updateHopsAway(uint32_t nodeNum, uint8_t hopsAway)
 {
+    NodeMutation mutation{};
     if (shouldMaintainNodeModel())
-        nodeStore.updateHops(nodeNum, hopsAway);
+        mutation = nodeStore.updateHops(nodeNum, hopsAway);
     if (nodeNum != ownNode) {
         auto it = nodes.find(nodeNum);
         if (it != nodes.end()) {
@@ -6044,7 +6727,7 @@ void TFTView_320x240::updateHopsAway(uint32_t nodeNum, uint8_t hopsAway)
             lv_obj_remove_flag(it->second->LV_OBJ_IDX(node_sig_idx), LV_OBJ_FLAG_HIDDEN);
         }
     }
-    syncNodeListPresentation();
+    syncNodeListPresentation(mutation);
 }
 
 void TFTView_320x240::updateConnectionStatus(const meshtastic_DeviceConnectionStatus &status)
@@ -6735,7 +7418,16 @@ void TFTView_320x240::notifyResync(bool show)
             lv_screen_load_anim(objects.main_screen, LV_SCR_LOAD_ANIM_NONE, 0, 0, false);
         }
     }
-    syncNodeListPresentation();
+    syncNodeListPresentation(true);
+#if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH)
+    if (!show) {
+        startNodeListHardwareBenchmark();
+    }
+#elif defined(DEVICE_UI_MUI_VIRTUAL_NODE_LIST) && defined(DEVICE_UI_MUI_NODE_LIST_DEMO_FIXTURES)
+    if (!show) {
+        startNodeListDemoFixtures();
+    }
+#endif
 }
 
 void TFTView_320x240::notifyReboot(bool show)
@@ -7538,10 +8230,11 @@ void TFTView_320x240::addChat(uint32_t from, uint32_t to, uint8_t ch)
     if (it != chats.end())
         return;
 
-    if (index >= c_max_channels)
-        if (shouldMaintainNodeModel())
-            nodeStore.setActiveChat(index, true);
-    syncNodeListPresentation();
+    NodeMutation mutation{};
+    if (index >= c_max_channels && shouldMaintainNodeModel()) {
+        mutation = nodeStore.setActiveChat(index, true);
+    }
+    syncNodeListPresentation(mutation);
 
     lv_obj_t *chatDelBtn = nullptr;
     lv_obj_t *parent_obj = objects.chats_panel;
@@ -7999,6 +8692,11 @@ bool TFTView_320x240::shouldMaintainNodeModel(void) const
 
 void TFTView_320x240::syncNodeListPresentation(void)
 {
+    syncNodeListPresentation(false);
+}
+
+void TFTView_320x240::syncNodeListPresentation(bool forceRebind)
+{
     if (!shouldMaintainNodeModel()) {
         return;
     }
@@ -8010,6 +8708,16 @@ void TFTView_320x240::syncNodeListPresentation(void)
     if (currentNode && !nodeStore.find(currentNode)) {
         selectNode(0);
     }
+    nodeCount = static_cast<uint16_t>(nodeStore.size());
+    nodesFiltered = static_cast<uint16_t>(nodeCount - visibleNodes.size());
+    nodesOnline = 0;
+    for (const auto &entry : nodeStore.records()) {
+        const uint32_t lastHeard = entry.first == ownNode ? static_cast<uint32_t>(curtime) : entry.second.lastHeard;
+        if (lastHeard && static_cast<uint32_t>(curtime) - lastHeard <= secs_until_offline) {
+            nodesOnline++;
+        }
+    }
+    updateNodesStatus();
     ensureVirtualNodeList();
     if (virtualNodeList) {
         NodeListRenderContext context;
@@ -8018,12 +8726,72 @@ void TFTView_320x240::syncNodeListPresentation(void)
         context.ownLatitude = myLatitude;
         context.ownLongitude = myLongitude;
         context.metricUnits = db.config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_METRIC;
-        virtualNodeList->sync(nodeStore, visibleNodes, currentNode, static_cast<uint32_t>(curtime), context);
+        context.highlightActiveChat = lv_obj_has_state(objects.nodes_hl_active_chat_switch, LV_STATE_CHECKED);
+        context.highlightPosition = lv_obj_has_state(objects.nodes_hl_position_switch, LV_STATE_CHECKED);
+        context.highlightTelemetry = lv_obj_has_state(objects.nodes_hl_telemetry_switch, LV_STATE_CHECKED);
+        context.highlightIaq = lv_obj_has_state(objects.nodes_hliaq_switch, LV_STATE_CHECKED);
+        std::snprintf(context.highlightName, sizeof(context.highlightName), "%s",
+                      lv_textarea_get_text(objects.nodes_hl_name_area));
+        virtualNodeList->sync(nodeStore, visibleNodes, currentNode, static_cast<uint32_t>(curtime), context, forceRebind);
+    }
+#endif
+}
+
+void TFTView_320x240::syncNodeListPresentation(const NodeMutation &mutation)
+{
+    if (mutation.kind == NodeMutationKind::Unchanged) {
+        return;
+    }
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    if (useVirtualNodeList && mutationCanRefreshVirtualRow(mutation)) {
+        refreshVirtualNodePresentation(mutation.id);
+        return;
+    }
+#endif
+    syncNodeListPresentation();
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    if (useVirtualNodeList && mutation.kind == NodeMutationKind::Updated && mutation.id) {
+        refreshVirtualNodePresentation(mutation.id);
     }
 #endif
 }
 
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+bool TFTView_320x240::mutationCanRefreshVirtualRow(const NodeMutation &mutation) const
+{
+    if (mutation.kind != NodeMutationKind::Updated || mutation.id == 0) {
+        return false;
+    }
+
+    uint32_t contentFields = NodeFieldSignal | NodeFieldDeviceMetrics | NodeFieldEnvironmentMetrics | NodeFieldAirQualityMetrics;
+    const int hopsFilter = static_cast<int>(lv_dropdown_get_selected(objects.nodes_filter_hops_dropdown));
+    if (!hopsFilter) {
+        contentFields |= NodeFieldHops;
+    }
+
+    return (mutation.changedFields & ~contentFields) == 0;
+}
+
+bool TFTView_320x240::refreshVirtualNodePresentation(NodeId id)
+{
+    if (!virtualNodeList) {
+        return false;
+    }
+
+    NodeListRenderContext context;
+    context.ownNode = ownNode;
+    context.hasOwnPosition = hasPosition;
+    context.ownLatitude = myLatitude;
+    context.ownLongitude = myLongitude;
+    context.metricUnits = db.config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_METRIC;
+    context.highlightActiveChat = lv_obj_has_state(objects.nodes_hl_active_chat_switch, LV_STATE_CHECKED);
+    context.highlightPosition = lv_obj_has_state(objects.nodes_hl_position_switch, LV_STATE_CHECKED);
+    context.highlightTelemetry = lv_obj_has_state(objects.nodes_hl_telemetry_switch, LV_STATE_CHECKED);
+    context.highlightIaq = lv_obj_has_state(objects.nodes_hliaq_switch, LV_STATE_CHECKED);
+    std::snprintf(context.highlightName, sizeof(context.highlightName), "%s", lv_textarea_get_text(objects.nodes_hl_name_area));
+    return virtualNodeList->refreshNode(id, static_cast<uint32_t>(curtime), context);
+}
+
 void TFTView_320x240::ensureVirtualNodeList(void)
 {
     if (virtualNodeList) {
@@ -8033,29 +8801,8 @@ void TFTView_320x240::ensureVirtualNodeList(void)
         return;
     }
 
-    lv_obj_t *hostParent = lv_obj_get_parent(objects.nodes_panel);
-    if (!hostParent) {
-        hostParent = lv_screen_active();
-    }
-
-    virtualNodeListHost = lv_obj_create(hostParent);
-    lv_obj_set_pos(virtualNodeListHost, lv_obj_get_x(objects.nodes_panel), lv_obj_get_y(objects.nodes_panel));
-    const int32_t width = lv_obj_get_width(objects.nodes_panel);
-    const int32_t height = lv_obj_get_height(objects.nodes_panel);
-    lv_obj_set_size(virtualNodeListHost, width > 0 ? width : LV_PCT(100), height > 0 ? height : LV_PCT(100));
-    lv_obj_set_scroll_dir(virtualNodeListHost, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(virtualNodeListHost, LV_SCROLLBAR_MODE_AUTO);
-    lv_obj_set_style_pad_top(virtualNodeListHost, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_bottom(virtualNodeListHost, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_left(virtualNodeListHost, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_right(virtualNodeListHost, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_border_width(virtualNodeListHost, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_opa(virtualNodeListHost, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_remove_flag(virtualNodeListHost, LV_OBJ_FLAG_SCROLL_CHAIN);
-    if (lv_obj_has_flag(objects.nodes_panel, LV_OBJ_FLAG_HIDDEN)) {
-        lv_obj_add_flag(virtualNodeListHost, LV_OBJ_FLAG_HIDDEN);
-    }
-    lv_obj_move_foreground(virtualNodeListHost);
+    virtualNodeListHost = objects.nodes_panel;
+    lv_obj_add_flag(objects.node_panel, LV_OBJ_FLAG_HIDDEN);
     virtualNodeList.reset(new VirtualNodeList(virtualNodeListHost, *this));
 }
 
@@ -8081,7 +8828,9 @@ void TFTView_320x240::nodeClicked(NodeId id)
         chooseNodeTraceRoute = false;
         ui_event_trace_route(nullptr);
     } else {
-        syncNodeListPresentation();
+        if (virtualNodeList) {
+            virtualNodeList->setExpanded(currentNode);
+        }
     }
 }
 
@@ -8094,12 +8843,15 @@ void TFTView_320x240::nodeLongPressed(NodeId id)
 
 void TFTView_320x240::nodeFocused(NodeId id)
 {
-    if (!id || !nodeStore.find(id)) {
-        return;
-    }
-    selectNode(id);
-    if (virtualNodeList) {
-        virtualNodeList->scrollTo(id, LV_ANIM_OFF);
+    (void)id;
+}
+
+void TFTView_320x240::nodeFocusBoundary(bool forward)
+{
+    (void)forward;
+    setInputGroup();
+    if (activeButton) {
+        lv_group_focus_obj(activeButton);
     }
 }
 
@@ -8119,9 +8871,10 @@ void TFTView_320x240::nodePositionClicked(NodeId id)
 
 void TFTView_320x240::removeNode(uint32_t nodeNum)
 {
+    NodeMutation mutation{};
     if (shouldMaintainNodeModel())
-        nodeStore.remove(nodeNum);
-    syncNodeListPresentation();
+        mutation = nodeStore.remove(nodeNum);
+    syncNodeListPresentation(mutation);
     auto it = nodes.find(nodeNum);
     if (it != nodes.end()) {
     }
@@ -8129,53 +8882,45 @@ void TFTView_320x240::removeNode(uint32_t nodeNum)
 
 void TFTView_320x240::setNodeImage(uint32_t nodeNum, eRole role, bool unmessagable, lv_obj_t *img)
 {
-    uint32_t bgColor, fgColor;
-    std::tie(bgColor, fgColor) = nodeColor(nodeNum);
+    const void *source = &img_node_client_image;
     if (unmessagable) {
-        lv_image_set_src(img, &img_unmessagable_image);
-        lv_obj_set_style_border_color(img, lv_color_hex(bgColor), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_color(img, lv_color_hex(0x202020), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_img_recolor(img, lv_color_hex(0xFF5555), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_img_recolor_opa(img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-        return;
+        source = &img_unmessagable_image;
     } else {
         switch (role) {
         case client:
         case client_mute:
         case client_hidden:
         case tak: {
-            lv_image_set_src(img, &img_node_client_image);
+            source = &img_node_client_image;
             break;
         }
         case router_client: {
-            lv_image_set_src(img, &img_top_nodes_image);
+            source = &img_top_nodes_image;
             break;
         }
         case repeater:
         case router:
         case router_late: {
-            lv_image_set_src(img, &img_node_router_image);
+            source = &img_node_router_image;
             break;
         }
         case tracker:
         case sensor:
         case lost_and_found:
         case tak_tracker: {
-            lv_image_set_src(img, &img_node_sensor_image);
+            source = &img_node_sensor_image;
             break;
         }
         case unknown: {
-            lv_image_set_src(img, &img_circle_question_image);
+            source = &img_circle_question_image;
             break;
         }
         default:
-            lv_image_set_src(img, &img_node_client_image);
+            source = &img_node_client_image;
             break;
         }
     }
-    lv_obj_set_style_bg_color(img, lv_color_hex(bgColor), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_border_color(img, lv_color_hex(bgColor), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_img_recolor_opa(img, fgColor ? 0 : 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+    NodeListRowPresentation::applyNodeImage(img, nodeNum, source, unmessagable, false);
 }
 
 void TFTView_320x240::updateNodesStatus(void)
@@ -8199,6 +8944,21 @@ void TFTView_320x240::updateNodesStatus(void)
  */
 void TFTView_320x240::updateNodesFiltered(bool reset)
 {
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    if (useVirtualNodeList) {
+        if (!reset && !nodesChanged && !processingFilter) {
+            return;
+        }
+        if (reset || nodesChanged) {
+            nodesFiltered = 0;
+            nodesChanged = false;
+            processingFilter = true;
+        }
+        processingFilter = false;
+        syncNodeListPresentation();
+        return;
+    }
+#endif
     static auto it = nodes.begin();
     if (reset || nodesChanged) {
         nodesFiltered = 0;
@@ -8226,8 +8986,9 @@ void TFTView_320x240::updateNodesFiltered(bool reset)
  */
 void TFTView_320x240::updateLastHeard(uint32_t nodeNum)
 {
+    NodeMutation mutation{};
     if (shouldMaintainNodeModel())
-        nodeStore.updateLastHeard(nodeNum, curtime);
+        mutation = nodeStore.updateLastHeard(nodeNum, curtime);
     auto it = nodes.find(nodeNum);
     if (it != nodes.end() && it->second) {
         time_t lastHeard = (time_t)it->second->LV_OBJ_IDX(node_lh_idx)->user_data;
@@ -8249,7 +9010,7 @@ void TFTView_320x240::updateLastHeard(uint32_t nodeNum)
                 _lv_ll_move_before(lv_group_ll, act, _lv_ll_get_next(lv_group_ll, topNodeLL));
         }
     }
-    syncNodeListPresentation();
+    syncNodeListPresentation(mutation);
 }
 
 /**
@@ -8258,6 +9019,15 @@ void TFTView_320x240::updateLastHeard(uint32_t nodeNum)
  */
 void TFTView_320x240::updateAllLastHeard(void)
 {
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    if (useVirtualNodeList) {
+        if (ownNode) {
+            nodeStore.updateLastHeard(ownNode, curtime);
+        }
+        syncNodeListPresentation();
+        return;
+    }
+#endif
     uint16_t online = 0;
     time_t lastHeard;
     for (auto it : nodes) {
@@ -8579,7 +9349,23 @@ void TFTView_320x240::task_handler(void)
 {
     MeshtasticView::task_handler();
 
+#if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH)
+    if (!screensInitialised && !nodeListHardwareBenchmarkAwaitingScreensLogged) {
+        ILOG_INFO("MUI_NODE_LIST_HW_BENCH_STATE awaiting_screens");
+        nodeListHardwareBenchmarkAwaitingScreensLogged = true;
+    }
+#endif
     if (screensInitialised) {
+#if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH)
+        if (!nodeListHardwareBenchmarkStarted) {
+            startNodeListHardwareBenchmark();
+        }
+        advanceNodeListHardwareBenchmark();
+#elif defined(DEVICE_UI_MUI_VIRTUAL_NODE_LIST) && defined(DEVICE_UI_MUI_NODE_LIST_DEMO_FIXTURES)
+        PowerFSM_notifyInput();
+        nodeModelEnabled = true;
+#endif
+
         if (map && activePanel == objects.map_panel)
             map->task_handler();
 

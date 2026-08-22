@@ -30,6 +30,7 @@ class VisibleNodeIndex
     const std::vector<NodeId> &ids() const { return visibleIds; }
     size_t size() const { return visibleIds.size(); }
     bool empty() const { return visibleIds.empty(); }
+    uint32_t generation() const { return rebuildGeneration; }
 
     std::optional<size_t> indexOf(NodeId id) const;
     bool contains(NodeId id) const;
@@ -38,4 +39,5 @@ class VisibleNodeIndex
 
   private:
     std::vector<NodeId> visibleIds;
+    uint32_t rebuildGeneration = 0;
 };

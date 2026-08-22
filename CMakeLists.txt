@@ -58,10 +58,6 @@ add_compile_definitions(ARCH_PORTDUINO)
 add_compile_definitions(ARDUINO)
 add_compile_definitions(VIEW_320x240)
 
-if(ENABLE_MUI_VIRTUAL_NODE_LIST)
-    add_compile_definitions(DEVICE_UI_MUI_VIRTUAL_NODE_LIST)
-endif()
-
 if(ENABLE_MUI_HEADLESS_TESTS)
     add_compile_definitions(DEVICE_UI_HEADLESS_TEST)
     add_compile_definitions(HAS_TFT=1)
@@ -157,6 +153,9 @@ endif()
 
 add_library(DeviceUI ${sources})
 target_link_libraries(DeviceUI PRIVATE lvgl::lvgl LovyanGFX Portduino Protobufs CURL::libcurl)
+if(ENABLE_MUI_VIRTUAL_NODE_LIST)
+    target_compile_definitions(DeviceUI PUBLIC DEVICE_UI_MUI_VIRTUAL_NODE_LIST)
+endif()
 
 if(ENABLE_MUI_HEADLESS_TESTS)
     execute_process(
@@ -258,6 +257,42 @@ if(ENABLE_MUI_X11_SIMULATOR)
         message(FATAL_ERROR "Xtst is required for X11 simulator real input exercise")
     endif()
     target_include_directories(lvgl PUBLIC ${X11_INCLUDE_DIR})
+    function(configure_x11_benchmark_device_ui target)
+        add_library(${target} STATIC ${sources})
+        target_link_libraries(${target} PRIVATE lvgl::lvgl LovyanGFX Portduino Protobufs CURL::libcurl)
+        target_compile_definitions(${target} PUBLIC DEVICE_UI_MUI_NODE_LIST_HW_BENCH)
+        target_compile_definitions(${target} PRIVATE UNIT_TEST)
+        if(ARGC GREATER 1 AND ARGV1 STREQUAL "VIRTUAL")
+            target_compile_definitions(${target} PUBLIC DEVICE_UI_MUI_VIRTUAL_NODE_LIST)
+        endif()
+        target_compile_options(${target} PUBLIC -Wall -Wno-format -Wfloat-conversion)
+        target_include_directories(${target} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/locale
+            ${CMAKE_CURRENT_SOURCE_DIR}/portduino
+            ${CMAKE_CURRENT_SOURCE_DIR}/generated/${GENERATED_VIEW}
+            ${GENERATED_FILES_DIR}
+            ${CMAKE_CURRENT_BINARY_DIR}
+            ${nanopb_SOURCE_DIR}
+            ${doctest_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        )
+        if(APPLE)
+            foreach(PORTDUINO_INCLUDE_DIR IN LISTS PORTDUINO_INCLUDE_DIRS)
+                target_compile_options(${target} PRIVATE "-idirafter${PORTDUINO_INCLUDE_DIR}")
+            endforeach()
+            target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-includeArduino.h>")
+        endif()
+    endfunction()
+    if(ENABLE_MUI_VIRTUAL_NODE_LIST)
+        configure_x11_benchmark_device_ui(DeviceUIX11Benchmark VIRTUAL)
+    else()
+        configure_x11_benchmark_device_ui(DeviceUIX11Benchmark)
+    endif()
+    if(ENABLE_MUI_VIRTUAL_NODE_LIST)
+        configure_x11_benchmark_device_ui(DeviceUIX11BenchmarkLegacy)
+    endif()
     add_executable(mui_node_list_simulator
         tools/mui_node_list_simulator.cpp
         resources/mouse_cursor_icon.c
@@ -278,7 +313,7 @@ if(ENABLE_MUI_X11_SIMULATOR)
         ${nanopb_SOURCE_DIR}
     )
     target_link_libraries(mui_node_list_simulator PRIVATE
-        DeviceUI
+        DeviceUIX11Benchmark
         lvgl::lvgl
         LovyanGFX
         Portduino
@@ -290,13 +325,62 @@ if(ENABLE_MUI_X11_SIMULATOR)
         ${XTST_LIBRARY}
         ZLIB::ZLIB
     )
-    target_compile_definitions(mui_node_list_simulator PRIVATE UNIT_TEST DEVICE_UI_X11_SIMULATOR)
+    target_compile_definitions(mui_node_list_simulator PRIVATE
+        UNIT_TEST
+        DEVICE_UI_X11_SIMULATOR
+        DEVICE_UI_MUI_NODE_LIST_HW_BENCH
+    )
     if(APPLE)
         foreach(PORTDUINO_INCLUDE_DIR IN LISTS PORTDUINO_INCLUDE_DIRS)
             target_compile_options(mui_node_list_simulator PRIVATE "-idirafter${PORTDUINO_INCLUDE_DIR}")
         endforeach()
     endif()
     set_target_properties(mui_node_list_simulator PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+    if(ENABLE_MUI_VIRTUAL_NODE_LIST)
+        add_executable(mui_node_list_simulator_legacy
+            tools/mui_node_list_simulator.cpp
+            resources/mouse_cursor_icon.c
+            tests/X11MuiSimulator.cpp
+            tests/MuiTestHarness.cpp
+            tests/HeadlessLinuxHardwareI2C.cpp
+            tests/HeadlessPlatform.cpp
+        )
+        target_include_directories(mui_node_list_simulator_legacy PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/locale
+            ${CMAKE_CURRENT_SOURCE_DIR}/portduino
+            ${CMAKE_CURRENT_SOURCE_DIR}/generated/${GENERATED_VIEW}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests
+            ${GENERATED_FILES_DIR}
+            ${CMAKE_CURRENT_BINARY_DIR}
+            ${nanopb_SOURCE_DIR}
+        )
+        target_link_libraries(mui_node_list_simulator_legacy PRIVATE
+            DeviceUIX11BenchmarkLegacy
+            lvgl::lvgl
+            LovyanGFX
+            Portduino
+            Protobufs
+            PNGdec
+            protobuf-nanopb-static
+            doctest::doctest
+            X11::X11
+            ${XTST_LIBRARY}
+            ZLIB::ZLIB
+        )
+        target_compile_definitions(mui_node_list_simulator_legacy PRIVATE
+            UNIT_TEST
+            DEVICE_UI_X11_SIMULATOR
+            DEVICE_UI_MUI_NODE_LIST_HW_BENCH
+        )
+        if(APPLE)
+            foreach(PORTDUINO_INCLUDE_DIR IN LISTS PORTDUINO_INCLUDE_DIRS)
+                target_compile_options(mui_node_list_simulator_legacy PRIVATE "-idirafter${PORTDUINO_INCLUDE_DIR}")
+            endforeach()
+        endif()
+        set_target_properties(mui_node_list_simulator_legacy PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+    endif()
 endif()
 
 # Handle Windows Static linking dependencies if applicable
@@ -410,6 +494,12 @@ if(ENABLE_DOCTESTS)
                      COMMAND ${CMAKE_COMMAND}
                      -DMUI_NODE_LIST_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator>
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/AssertMuiX11WheelRequired.cmake)
+            add_test(NAME MuiX11SimulatorBenchmarkPair
+                     COMMAND ${CMAKE_COMMAND}
+                     -DMUI_NODE_LIST_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator>
+                     -DMUI_NODE_LIST_LEGACY_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator_legacy>
+                     -DMUI_NODE_LIST_VIRTUAL_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator>
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunMuiX11SimulatorBenchmarkPairTest.cmake)
         else()
             add_test(NAME MuiX11SimulatorRejectsVirtualCandidate
                      COMMAND ${CMAKE_COMMAND}

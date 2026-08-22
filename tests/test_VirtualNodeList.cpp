@@ -12,12 +12,19 @@ class DummyActionSink : public NodeListActionSink
     void nodeClicked(NodeId id) override { lastClicked = id; }
     void nodeLongPressed(NodeId id) override { lastLongPressed = id; }
     void nodeFocused(NodeId id) override { lastFocused = id; }
+    void nodeFocusBoundary(bool forward) override
+    {
+        boundaryCalled = true;
+        boundaryForward = forward;
+    }
     void nodePositionClicked(NodeId id) override { lastPositionClicked = id; }
 
     NodeId lastClicked = 0;
     NodeId lastLongPressed = 0;
     NodeId lastFocused = 0;
     NodeId lastPositionClicked = 0;
+    bool boundaryCalled = false;
+    bool boundaryForward = false;
 };
 
 namespace
@@ -42,6 +49,20 @@ std::string labelText(lv_obj_t *row, uint32_t childIndex)
 bool childHidden(lv_obj_t *row, uint32_t childIndex)
 {
     return lv_obj_has_flag(lv_obj_get_child(row, static_cast<int32_t>(childIndex)), LV_OBJ_FLAG_HIDDEN);
+}
+
+lv_obj_t *virtualSpacer(lv_obj_t *parent)
+{
+    REQUIRE(parent != nullptr);
+    const uint32_t childCount = lv_obj_get_child_count(parent);
+    for (uint32_t index = 0; index < childCount; ++index) {
+        lv_obj_t *child = lv_obj_get_child(parent, static_cast<int32_t>(index));
+        if (child && lv_obj_get_child_count(child) == 0 && lv_obj_get_width(child) == 1) {
+            return child;
+        }
+    }
+    FAIL("virtual spacer not found");
+    return nullptr;
 }
 
 MuiRowSnapshot snapshotVirtualRow(lv_obj_t *row)
@@ -75,6 +96,9 @@ MuiRowSnapshot snapshotVirtualRow(lv_obj_t *row)
         lv_obj_get_x(shortName),
         lv_obj_get_x(signal),
         lv_obj_get_y(signal),
+        lv_obj_get_width(row),
+        lv_obj_get_width(signal),
+        static_cast<int32_t>(lv_label_get_long_mode(signal)),
     };
 }
 
@@ -132,9 +156,15 @@ NodeId visibleVirtualNodeAt(lv_obj_t *root, size_t visibleIndex)
 MuiRowSnapshot syncVirtualSnapshotFromLegacy(MuiTestHarness &legacy, NodeId nodeId, NodeId expanded = 0, NodeId ownNode = 0)
 {
     legacy.enableVirtualNodeModelFixture();
-    lv_obj_t *virtualRoot = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(virtualRoot, 320, 240);
+    lv_obj_t *legacyRoot = legacy.nodeListRootForTesting();
+    REQUIRE(legacyRoot != nullptr);
+    lv_obj_t *virtualRoot = lv_obj_create(lv_obj_get_parent(legacyRoot));
+    lv_obj_remove_style_all(virtualRoot);
+    lv_obj_add_flag(virtualRoot, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_set_size(virtualRoot, lv_obj_get_content_width(legacyRoot), lv_obj_get_content_height(legacyRoot));
     lv_obj_set_style_layout(virtualRoot, LV_LAYOUT_NONE, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(virtualRoot, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_update_layout(virtualRoot);
 
     MuiRowSnapshot snapshot;
     {
@@ -330,6 +360,7 @@ TEST_CASE("VirtualNodeList renders expanded legacy detail labels without adding 
 
     index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
     list.sync(store, index, 0x12345678, 1700000000U);
+    list.finishExpansionForTesting();
     harness.pump();
 
     lv_obj_t *row = boundRow(parent, 0x12345678);
@@ -400,7 +431,7 @@ TEST_CASE("VirtualNodeList matches legacy battery clamp and imperial position/we
     store.updateDeviceMetrics(0x12345678, device);
     list.sync(store, index, 0x12345678, 1700000000U, context);
     harness.pump();
-    CHECK(labelText(row, 4).empty());
+    CHECK(labelText(row, 4) == "100% 4.12V");
 }
 
 TEST_CASE("VirtualNodeList renders legacy role and unmessagable icons from the record")
@@ -496,9 +527,15 @@ TEST_CASE("VirtualNodeList matches the same legacy row visual contract at the sa
     legacy.updateHopsFixture(target, 2);
     legacy.pump();
 
-    lv_obj_t *virtualRoot = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(virtualRoot, 320, 240);
+    lv_obj_t *legacyRoot = legacy.nodeListRootForTesting();
+    REQUIRE(legacyRoot != nullptr);
+    lv_obj_t *virtualRoot = lv_obj_create(lv_obj_get_parent(legacyRoot));
+    lv_obj_remove_style_all(virtualRoot);
+    lv_obj_add_flag(virtualRoot, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_set_size(virtualRoot, lv_obj_get_content_width(legacyRoot), lv_obj_get_content_height(legacyRoot));
     lv_obj_set_style_layout(virtualRoot, LV_LAYOUT_NONE, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(virtualRoot, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_update_layout(virtualRoot);
 
     MuiRowSnapshot legacyRow;
     MuiRowSnapshot virtualRow;
@@ -539,6 +576,9 @@ TEST_CASE("VirtualNodeList matches the same legacy row visual contract at the sa
     CHECK(virtualRow.shortNameY == legacyRow.shortNameY);
     CHECK(virtualRow.signalX == legacyRow.signalX);
     CHECK(virtualRow.signalY == legacyRow.signalY);
+    CHECK(virtualRow.rowWidth == legacyRow.rowWidth);
+    CHECK(virtualRow.signalWidth == legacyRow.signalWidth);
+    CHECK(virtualRow.signalLongMode == legacyRow.signalLongMode);
 }
 
 TEST_CASE("VirtualNodeList matches legacy signal label event order")
@@ -741,6 +781,676 @@ TEST_CASE("VirtualNodeList expansion and stable selection")
 
     // Node 5 should still be recorded as expanded even when scrolled off-screen
     CHECK(list.getExpanded() == 5);
+}
+
+TEST_CASE("VirtualNodeList expanded row geometry is exact at list boundaries")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    for (uint32_t i = 1; i <= 5; ++i) {
+        meshtastic_User user{};
+        std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
+        store.upsertUser(i, 0, 1000 + (6 - i), user, false);
+    }
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+
+    CHECK(VirtualNodeList::COLLAPSED_ROW_HEIGHT == 53);
+    CHECK(VirtualNodeList::EXPANDED_ROW_HEIGHT == 83);
+    CHECK(VirtualNodeList::ROW_GAP == 5);
+
+    constexpr int32_t stride = 53 + 5;
+    constexpr int32_t delta = 83 - 53;
+
+    SUBCASE("expanded at index 0")
+    {
+        list.sync(store, index, 1, 1700000000U);
+        list.finishExpansionForTesting();
+        harness.pump();
+
+        CHECK(list.rowHeightForTesting(1) == VirtualNodeList::EXPANDED_ROW_HEIGHT);
+        CHECK(list.rowYForTesting(0) == 0);
+        CHECK(list.rowYForTesting(1) == stride + delta);
+        CHECK(list.rowYForTesting(5) == 5 * stride - VirtualNodeList::ROW_GAP + delta);
+        CHECK(lv_obj_get_y(boundRow(parent, 1)) == 0);
+        CHECK(lv_obj_get_height(boundRow(parent, 1)) == 83);
+        CHECK(lv_obj_get_y(boundRow(parent, 2)) == 88);
+        CHECK(lv_obj_get_height(virtualSpacer(parent)) == 315);
+    }
+
+    SUBCASE("expanded at middle index")
+    {
+        list.sync(store, index, 3, 1700000000U);
+        list.finishExpansionForTesting();
+        harness.pump();
+
+        CHECK(list.rowHeightForTesting(3) == VirtualNodeList::EXPANDED_ROW_HEIGHT);
+        CHECK(list.rowYForTesting(2) == 2 * stride);
+        CHECK(list.rowYForTesting(3) == 3 * stride + delta);
+        CHECK(list.rowYForTesting(5) == 5 * stride - VirtualNodeList::ROW_GAP + delta);
+        CHECK(lv_obj_get_y(boundRow(parent, 3)) == 116);
+        CHECK(lv_obj_get_height(boundRow(parent, 3)) == 83);
+        CHECK(lv_obj_get_y(boundRow(parent, 4)) == 204);
+        CHECK(lv_obj_get_height(virtualSpacer(parent)) == 315);
+    }
+
+    SUBCASE("expanded at final index")
+    {
+        list.sync(store, index, 5, 1700000000U);
+        list.finishExpansionForTesting();
+        harness.pump();
+
+        CHECK(list.rowHeightForTesting(5) == VirtualNodeList::EXPANDED_ROW_HEIGHT);
+        CHECK(list.rowYForTesting(4) == 4 * stride);
+        CHECK(list.rowYForTesting(5) == 5 * stride - VirtualNodeList::ROW_GAP + delta);
+        CHECK(lv_obj_get_y(boundRow(parent, 5)) == 232);
+        CHECK(lv_obj_get_height(boundRow(parent, 5)) == 83);
+        CHECK(lv_obj_get_height(virtualSpacer(parent)) == 315);
+    }
+}
+
+TEST_CASE("VirtualNodeList expansion animation geometry stays linear")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    for (uint32_t i = 1; i <= 5; ++i) {
+        meshtastic_User user{};
+        std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
+        store.upsertUser(i, 0, 1000 + (6 - i), user, false);
+    }
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+
+    constexpr int32_t stride = 53 + 5;
+    constexpr int32_t delta = 83 - 53;
+
+    list.sync(store, index, 2, 1700000000U);
+    list.setExpansionProgressForTesting(0);
+    CHECK(list.rowHeightForTesting(2) == VirtualNodeList::COLLAPSED_ROW_HEIGHT);
+    CHECK(list.rowYForTesting(3) == 3 * stride);
+
+    list.setExpansionProgressForTesting(50);
+    CHECK(list.rowHeightForTesting(2) == VirtualNodeList::COLLAPSED_ROW_HEIGHT + delta / 2);
+    CHECK(list.rowYForTesting(3) == 3 * stride + delta / 2);
+
+    list.setExpansionProgressForTesting(100);
+    CHECK(list.rowHeightForTesting(2) == VirtualNodeList::EXPANDED_ROW_HEIGHT);
+    CHECK(list.rowYForTesting(3) == 3 * stride + delta);
+    list.finishExpansionForTesting();
+    harness.pump();
+    CHECK(lv_obj_get_height(boundRow(parent, 2)) == 83);
+    CHECK(lv_obj_get_y(boundRow(parent, 3)) == 146);
+    CHECK(lv_obj_get_height(virtualSpacer(parent)) == 315);
+
+    list.setExpanded(4);
+    list.setExpansionProgressForTesting(50);
+    CHECK(list.rowHeightForTesting(2) == VirtualNodeList::EXPANDED_ROW_HEIGHT - delta / 2);
+    CHECK(list.rowHeightForTesting(4) == VirtualNodeList::COLLAPSED_ROW_HEIGHT + delta / 2);
+    CHECK(list.rowYForTesting(5) == 5 * stride - VirtualNodeList::ROW_GAP + delta);
+}
+
+TEST_CASE("VirtualNodeList applies expanded sync requests after the active animation finishes")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    for (uint32_t i = 1; i <= 5; ++i) {
+        meshtastic_User user{};
+        std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
+        store.upsertUser(i, 0, 1000 + (6 - i), user, false);
+    }
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+
+    SUBCASE("collapse request is replayed")
+    {
+        list.sync(store, index, 2, 1700000000U);
+        list.setExpansionProgressForTesting(50);
+        list.sync(store, index, 0, 1700000000U);
+        harness.pump();
+        CHECK(list.getExpanded() == 2);
+
+        list.finishExpansionForTesting();
+        harness.pump();
+        CHECK(list.getExpanded() == 0);
+        CHECK(list.expansionAnimating());
+        CHECK(lv_obj_get_height(boundRow(parent, 2)) == 83);
+
+        list.setExpansionProgressForTesting(100);
+        list.finishExpansionForTesting();
+        harness.pump();
+        CHECK_FALSE(list.expansionAnimating());
+        CHECK(lv_obj_get_height(boundRow(parent, 2)) == 53);
+        CHECK(lv_obj_get_height(virtualSpacer(parent)) == 285);
+    }
+
+    SUBCASE("reselection request is replayed after reorder")
+    {
+        list.sync(store, index, 2, 1700000000U);
+        list.setExpansionProgressForTesting(50);
+
+        for (uint32_t i = 1; i <= 5; ++i) {
+            store.updateLastHeard(i, 2000 + i);
+        }
+        index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+        list.sync(store, index, 4, 1700000000U);
+        harness.pump();
+
+        CHECK(list.getExpanded() == 2);
+        CHECK(lv_obj_get_y(boundRow(parent, 2)) == 174);
+        CHECK(list.rowHeightForTesting(2) == 68);
+        CHECK(lv_obj_get_height(virtualSpacer(parent)) == 300);
+
+        list.finishExpansionForTesting();
+        harness.pump();
+        CHECK(list.getExpanded() == 4);
+        CHECK(list.expansionAnimating());
+
+        list.setExpansionProgressForTesting(100);
+        list.finishExpansionForTesting();
+        harness.pump();
+        CHECK(lv_obj_get_y(boundRow(parent, 4)) == 58);
+        CHECK(lv_obj_get_height(boundRow(parent, 4)) == 83);
+        CHECK(lv_obj_get_height(virtualSpacer(parent)) == 315);
+    }
+
+    SUBCASE("removed expanded node drops its cached geometry")
+    {
+        list.sync(store, index, 2, 1700000000U);
+        list.setExpansionProgressForTesting(50);
+
+        store.remove(2);
+        index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+        list.sync(store, index, 4, 1700000000U);
+        harness.pump();
+
+        CHECK(boundRow(parent, 2) == nullptr);
+        CHECK(lv_obj_get_y(boundRow(parent, 3)) == 58);
+        CHECK(lv_obj_get_height(virtualSpacer(parent)) == 227);
+
+        list.finishExpansionForTesting();
+        harness.pump();
+        CHECK(list.getExpanded() == 4);
+        list.setExpansionProgressForTesting(100);
+        list.finishExpansionForTesting();
+        harness.pump();
+        CHECK(lv_obj_get_height(boundRow(parent, 4)) == 83);
+        CHECK(lv_obj_get_height(virtualSpacer(parent)) == 257);
+    }
+
+    SUBCASE("latest request for the current expanding row clears stale pending")
+    {
+        list.sync(store, index, 2, 1700000000U);
+        list.setExpansionProgressForTesting(50);
+        list.sync(store, index, 0, 1700000000U);
+        list.sync(store, index, 4, 1700000000U);
+        list.sync(store, index, 2, 1700000000U);
+        harness.pump();
+
+        CHECK(list.getExpanded() == 2);
+
+        list.finishExpansionForTesting();
+        harness.pump();
+        CHECK(list.getExpanded() == 2);
+        CHECK_FALSE(list.expansionAnimating());
+        CHECK(lv_obj_get_height(boundRow(parent, 2)) == 83);
+        CHECK(lv_obj_get_height(virtualSpacer(parent)) == 315);
+    }
+}
+
+TEST_CASE("VirtualNodeList scrolling expanded rows does not repeat expanded index scans")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    for (uint32_t i = 1; i <= 80; ++i) {
+        meshtastic_User user{};
+        std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
+        store.upsertUser(i, 0, 1000 + (81 - i), user, false);
+    }
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    list.sync(store, index, 40, 1700000000U);
+    list.setExpansionProgressForTesting(50);
+
+    const uint32_t scansAfterSync = list.expandedIndexScanCountForTesting();
+    CHECK(list.rowYForTesting(70) == 70 * 58 + 15);
+    CHECK(list.rowYForTesting(80) == 80 * 58 - 5 + 15);
+    CHECK(list.expandedIndexScanCountForTesting() == scansAfterSync);
+
+    list.scrollTo(70, LV_ANIM_OFF);
+    harness.pump();
+    list.refreshVisibleRows(true, false);
+
+    CHECK(list.expandedIndexScanCountForTesting() == scansAfterSync);
+}
+
+TEST_CASE("VirtualNodeList sync skips redundant visible-row rebinding")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    for (uint32_t i = 1; i <= 30; ++i) {
+        meshtastic_User user{};
+        std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
+        store.upsertUser(i, 0, 1000 + i, user, false);
+    }
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+
+    list.sync(store, index, 0, 1700000000U);
+    const uint32_t bindsAfterInitialSync = list.bindGenerationForTesting();
+
+    list.sync(store, index, 0, 1700000000U);
+
+    CHECK(list.bindGenerationForTesting() == bindsAfterInitialSync);
+}
+
+TEST_CASE("VirtualNodeList keeps the visible anchor stable when a node arrives above it")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    for (uint32_t i = 1; i <= 30; ++i) {
+        meshtastic_User user{};
+        std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
+        store.upsertUser(i, 0, 1000 + i, user, false);
+    }
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    list.sync(store, index, 0, 1700000000U);
+
+    constexpr NodeId anchorId = 20;
+    const size_t oldAnchorIndex = index.indexOf(anchorId).value();
+    const int32_t oldAnchorY = list.rowYForTesting(oldAnchorIndex);
+    lv_obj_scroll_to_y(parent, oldAnchorY + 7, LV_ANIM_OFF);
+    harness.pump();
+    const int32_t anchorOffset = lv_obj_get_scroll_y(parent) - oldAnchorY;
+
+    meshtastic_User incoming{};
+    std::strcpy(incoming.short_name, "NEW");
+    store.upsertUser(99, 0, 5000, incoming, false);
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    list.sync(store, index, 0, 1700000000U);
+    harness.pump();
+
+    const int32_t expectedScrollY = list.rowYForTesting(index.indexOf(anchorId).value()) + anchorOffset;
+    CHECK(lv_obj_get_scroll_y(parent) == expectedScrollY);
+}
+
+TEST_CASE("VirtualNodeList does not rebind unchanged visible rows for offscreen node arrival")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    for (uint32_t i = 1; i <= 30; ++i) {
+        meshtastic_User user{};
+        std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
+        store.upsertUser(i, 0, 1000 + i, user, false);
+    }
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    list.sync(store, index, 0, 1700000000U);
+    list.scrollTo(20, LV_ANIM_OFF);
+    harness.pump();
+    const uint32_t bindsBeforeArrival = list.bindGenerationForTesting();
+
+    meshtastic_User incoming{};
+    std::strcpy(incoming.short_name, "NEW");
+    store.upsertUser(99, 0, 5000, incoming, false);
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    list.sync(store, index, 0, 1700000000U);
+    harness.pump();
+
+    CHECK(list.bindGenerationForTesting() == bindsBeforeArrival);
+}
+
+TEST_CASE("VirtualNodeList rebinds only the newly visible row when the render window advances by one row")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    for (uint32_t i = 1; i <= 30; ++i) {
+        meshtastic_User user{};
+        std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
+        store.upsertUser(i, 0, 1000 + i, user, false);
+    }
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+
+    list.sync(store, index, 0, 1700000000U);
+    harness.pump();
+    const uint32_t bindsAfterInitialSync = list.bindGenerationForTesting();
+    const uint32_t panelMovesAfterInitialSync = list.panelOrderMoveCountForTesting();
+    const uint32_t groupMovesAfterInitialSync = list.groupOrderMoveCountForTesting();
+    REQUIRE(bindsAfterInitialSync == VirtualNodeList::POOL_SIZE);
+
+    lv_obj_scroll_to_y(parent, list.rowYForTesting(2), LV_ANIM_OFF);
+    harness.pump();
+    list.refreshVisibleRows();
+
+    CHECK(list.bindGenerationForTesting() == bindsAfterInitialSync + 1);
+    CHECK(list.panelOrderMoveCountForTesting() == panelMovesAfterInitialSync + 1);
+    CHECK(list.groupOrderMoveCountForTesting() == groupMovesAfterInitialSync + 1);
+}
+
+TEST_CASE("VirtualNodeList click retains the pressed node across pool reuse")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    for (uint32_t i = 1; i <= 30; ++i) {
+        meshtastic_User user{};
+        std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
+        store.upsertUser(i, 0, 1000 + i, user, false);
+    }
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    list.sync(store, index);
+
+    lv_obj_t *pressedRow = boundRow(parent, 30);
+    REQUIRE(pressedRow != nullptr);
+    lv_obj_t *pressedButton = lv_obj_get_child(pressedRow, 1);
+    REQUIRE(pressedButton != nullptr);
+    lv_obj_send_event(pressedButton, LV_EVENT_PRESSED, nullptr);
+
+    list.scrollTo(1, LV_ANIM_OFF);
+    harness.pump();
+    REQUIRE(static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(pressedButton))) != 30);
+
+    lv_obj_send_event(pressedButton, LV_EVENT_CLICKED, nullptr);
+    CHECK(sink.lastClicked == 30);
+}
+
+TEST_CASE("VirtualNodeList clears retained press identity when LVGL cancels the press")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    for (uint32_t i = 1; i <= 30; ++i) {
+        meshtastic_User user{};
+        std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
+        store.upsertUser(i, 0, 1000 + i, user, false);
+    }
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    list.sync(store, index);
+
+    lv_obj_t *pressedRow = boundRow(parent, 30);
+    REQUIRE(pressedRow != nullptr);
+    lv_obj_t *pressedButton = lv_obj_get_child(pressedRow, 1);
+    REQUIRE(pressedButton != nullptr);
+
+    SUBCASE("press lost")
+    {
+        lv_obj_send_event(pressedButton, LV_EVENT_PRESSED, nullptr);
+        lv_obj_send_event(pressedButton, LV_EVENT_PRESS_LOST, nullptr);
+        list.scrollTo(1, LV_ANIM_OFF);
+        harness.pump();
+
+        lv_obj_send_event(pressedButton, LV_EVENT_CLICKED, nullptr);
+        CHECK(sink.lastClicked != 30);
+    }
+
+    SUBCASE("cancel")
+    {
+        lv_obj_send_event(pressedButton, LV_EVENT_PRESSED, nullptr);
+        lv_obj_send_event(pressedButton, LV_EVENT_CANCEL, nullptr);
+        list.scrollTo(1, LV_ANIM_OFF);
+        harness.pump();
+
+        lv_obj_send_event(pressedButton, LV_EVENT_CLICKED, nullptr);
+        CHECK(sink.lastClicked != 30);
+    }
+}
+
+TEST_CASE("VirtualNodeList group edge navigation uses the currently focused recycled row")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    for (uint32_t i = 1; i <= 30; ++i) {
+        meshtastic_User user{};
+        std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
+        store.upsertUser(i, 0, 1000 + i, user, false);
+    }
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    list.sync(store, index);
+
+    list.focus(24);
+    REQUIRE(sink.lastFocused == 24);
+
+    lv_obj_t *focused = lv_group_get_focused(list.navigationGroup());
+    REQUIRE(focused != nullptr);
+    list.scrollTo(20, LV_ANIM_OFF);
+    harness.pump();
+
+    const NodeId recycledFocusedId = static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(focused)));
+    REQUIRE(recycledFocusedId != 0);
+    REQUIRE(recycledFocusedId != 24);
+    auto recycledIndex = index.indexOf(recycledFocusedId);
+    REQUIRE(recycledIndex.has_value());
+    REQUIRE(recycledIndex.value() + 1 < index.ids().size());
+    const NodeId expectedNext = index.ids()[recycledIndex.value() + 1];
+
+    lv_group_focus_next(list.navigationGroup());
+    harness.pump();
+
+    CHECK(sink.lastFocused == expectedNext);
+}
+
+TEST_CASE("VirtualNodeList hands both logical ends back to its action sink")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    VirtualNodeList list(harness.nodeListRootForTesting(), sink);
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    meshtastic_User user{};
+    std::strcpy(user.short_name, "ONE");
+    store.upsertUser(1, 0, 1000, user, false);
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    list.sync(store, index);
+
+    list.focus(1);
+    lv_group_focus_prev(list.navigationGroup());
+    harness.pump();
+    CHECK(sink.boundaryCalled);
+    CHECK_FALSE(sink.boundaryForward);
+
+    sink.boundaryCalled = false;
+    list.focus(1);
+    lv_group_focus_next(list.navigationGroup());
+    harness.pump();
+    CHECK(sink.boundaryCalled);
+    CHECK(sink.boundaryForward);
+}
+
+TEST_CASE("VirtualNodeList clears IAQ label styles when a pooled row becomes non-IAQ")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    VirtualNodeList list(parent, sink);
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    meshtastic_User user{};
+    std::strcpy(user.short_name, "AIR");
+    store.upsertUser(1, 0, 1000, user, false);
+    meshtastic_EnvironmentMetrics air{};
+    air.iaq = 42;
+    store.updateEnvironmentMetrics(1, air);
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+
+    NodeListRenderContext context;
+    context.highlightIaq = true;
+    list.sync(store, index, 1, 1700000000U, context);
+    list.finishExpansionForTesting();
+    lv_obj_t *row = boundRow(parent, 1);
+    REQUIRE(row != nullptr);
+    lv_obj_t *iaqLabel = lv_obj_get_child(row, 10);
+    REQUIRE(iaqLabel != nullptr);
+    CHECK(lv_obj_get_style_bg_opa(iaqLabel, LV_PART_MAIN) == LV_OPA_COVER);
+
+    context.highlightIaq = false;
+    list.sync(store, index, 1, 1700000000U, context, true);
+    harness.pump();
+
+    lv_obj_t *normalLabel = lv_label_create(row);
+    CHECK(lv_obj_get_style_bg_opa(iaqLabel, LV_PART_MAIN) == LV_OPA_TRANSP);
+    CHECK(lv_color_to_u32(lv_obj_get_style_bg_color(iaqLabel, LV_PART_MAIN)) ==
+          lv_color_to_u32(lv_obj_get_style_bg_color(normalLabel, LV_PART_MAIN)));
+    CHECK(lv_color_to_u32(lv_obj_get_style_text_color(iaqLabel, LV_PART_MAIN)) ==
+          lv_color_to_u32(lv_obj_get_style_text_color(normalLabel, LV_PART_MAIN)));
+    lv_obj_delete(normalLabel);
+}
+
+TEST_CASE("VirtualNodeList rebinds visible highlights when only render context changes")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    VirtualNodeList list(parent, sink);
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    meshtastic_User user{};
+    std::strcpy(user.short_name, "MATCH");
+    std::strcpy(user.long_name, "Context Match");
+    store.upsertUser(1, 0, 1000, user, false);
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+
+    list.sync(store, index, 0, 1700000000U);
+    lv_obj_t *row = boundRow(parent, 1);
+    REQUIRE(row != nullptr);
+    const uint32_t bindsBefore = list.bindGenerationForTesting();
+
+    NodeListRenderContext context;
+    std::strcpy(context.highlightName, "Match");
+    list.sync(store, index, 0, 1700000000U, context);
+
+    CHECK(list.bindGenerationForTesting() > bindsBefore);
+    CHECK(lv_color_to_u32(lv_obj_get_style_border_color(row, LV_PART_MAIN)) == 0xff67ea94U);
+}
+
+TEST_CASE("VirtualNodeList unit-test finish removes the live LVGL expansion animation")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    for (uint32_t i = 1; i <= 5; ++i) {
+        meshtastic_User user{};
+        std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
+        store.upsertUser(i, 0, 1000 + i, user, false);
+    }
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+
+    const uint16_t animationsBefore = lv_anim_count_running();
+    list.sync(store, index, 2, 1700000000U);
+    (void)animationsBefore;
+    REQUIRE(list.expansionAnimationRegisteredForTesting());
+
+    list.finishExpansionForTesting();
+
+    CHECK_FALSE(list.expansionAnimationRegisteredForTesting());
+    CHECK_FALSE(list.expansionAnimating());
+    CHECK(list.rowHeightForTesting(2) == VirtualNodeList::EXPANDED_ROW_HEIGHT);
 }
 
 TEST_CASE("VirtualNodeList handles rapid deletion while scrolled down and overscroll gracefully")

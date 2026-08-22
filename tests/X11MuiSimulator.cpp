@@ -3,6 +3,7 @@
 #include "X11MuiSimulator.h"
 #include "graphics/driver/DisplayDriverFactory.h"
 #include "graphics/driver/X11Driver.h"
+#include "graphics/view/TFT/TFTView_320x240.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -96,7 +97,8 @@ bool findNodeListButton(lv_obj_t *object, uint32_t selectedNode, uintptr_t focus
 
 X11MuiSimulator::X11MuiSimulator()
     : config(DisplayDriverConfig::device_t::X11, 320, 240), driver(nullptr), pointerInput(nullptr), keyboardInput(nullptr),
-      encoderInput(nullptr), originalPointerRead(nullptr), originalKeyboardRead(nullptr), originalEncoderRead(nullptr)
+      encoderInput(nullptr), fixturePointerInput(nullptr), originalPointerRead(nullptr), originalKeyboardRead(nullptr),
+      originalEncoderRead(nullptr)
 {
 }
 
@@ -110,6 +112,10 @@ bool X11MuiSimulator::initialize(Implementation implementation)
     harness = std::make_unique<MuiTestHarness>(config, driver);
     if (implementation == Implementation::VirtualCandidate) {
         harness->enableVirtualNodeListFixture();
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    } else {
+        harness->enableVirtualNodeModelFixture();
+#endif
     }
     scanInputs();
     pump(50);
@@ -138,6 +144,58 @@ void X11MuiSimulator::pump(uint32_t elapsedMs)
 {
     lv_tick_inc(elapsedMs);
     lv_timer_handler();
+}
+
+bool X11MuiSimulator::runNodeListHardwareBenchmark(uint32_t timeoutMs, bool tdeckConstrained, std::string &report)
+{
+#if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH)
+    if (!ready() || !ensurePointerInputForTesting()) {
+        return false;
+    }
+
+    auto *view = harness->viewForTesting();
+    if (!view) {
+        return false;
+    }
+
+    view->startNodeListHardwareBenchmark();
+    constexpr uint32_t defaultStepMs = 16;
+    constexpr uint32_t tdeckUiPeriodMs = 40;
+    constexpr uint32_t tdeckFrameTransferSleepMs = 31;
+    const uint32_t stepMs = tdeckConstrained ? tdeckUiPeriodMs : defaultStepMs;
+    for (uint32_t elapsed = 0; elapsed < timeoutMs && !view->nodeListHardwareBenchmarkComplete(); elapsed += stepMs) {
+        lv_tick_inc(stepMs);
+        if (tdeckConstrained) {
+            view->advanceNodeListHardwareBenchmark();
+        } else {
+            view->task_handler();
+        }
+        if (tdeckConstrained) {
+            lv_timer_handler();
+            if (driver && driver->getDisplay()) {
+                lv_refr_now(driver->getDisplay());
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(tdeckFrameTransferSleepMs));
+        } else {
+            for (uint8_t refresh = 0; refresh < 4; ++refresh) {
+                lv_tick_inc(4);
+                lv_timer_handler();
+                if (driver && driver->getDisplay()) {
+                    lv_refr_now(driver->getDisplay());
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+
+    report = view->nodeListHardwareBenchmarkReport();
+    return view->nodeListHardwareBenchmarkComplete() && report.rfind("MUI_NODE_LIST_HW_BENCH {", 0) == 0 &&
+           report.find("\"e\":\"none\"") != std::string::npos;
+#else
+    (void)timeoutMs;
+    report.clear();
+    return false;
+#endif
 }
 
 bool X11MuiSimulator::injectPointer(int16_t x, int16_t y, bool pressed)
@@ -303,6 +361,29 @@ void X11MuiSimulator::encoderReadCallback(lv_indev_t *indev, lv_indev_data_t *da
     data->enc_diff = simulator->encoderState.diff;
     data->state = LV_INDEV_STATE_RELEASED;
     simulator->encoderState.pending = false;
+}
+
+void X11MuiSimulator::fallbackPointerReadCallback(lv_indev_t *, lv_indev_data_t *data)
+{
+    data->point.x = 0;
+    data->point.y = 0;
+    data->state = LV_INDEV_STATE_RELEASED;
+}
+
+bool X11MuiSimulator::ensurePointerInputForTesting()
+{
+    for (lv_indev_t *input = lv_indev_get_next(nullptr); input; input = lv_indev_get_next(input)) {
+        if (lv_indev_get_type(input) == LV_INDEV_TYPE_POINTER) {
+            return true;
+        }
+    }
+
+    if (!fixturePointerInput) {
+        fixturePointerInput = lv_indev_create();
+        lv_indev_set_type(fixturePointerInput, LV_INDEV_TYPE_POINTER);
+        lv_indev_set_read_cb(fixturePointerInput, fallbackPointerReadCallback);
+    }
+    return fixturePointerInput != nullptr;
 }
 
 void X11MuiSimulator::scanInputs()

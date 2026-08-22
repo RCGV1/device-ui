@@ -31,6 +31,12 @@ bool samePosition(const NodePosition &left, const NodePosition &right)
            left.altitude == right.altitude && left.satellites == right.satellites && left.precision == right.precision;
 }
 
+bool samePublicKey(const meshtastic_User &left, const meshtastic_User &right)
+{
+    return left.public_key.size == right.public_key.size &&
+           std::memcmp(left.public_key.bytes, right.public_key.bytes, left.public_key.size) == 0;
+}
+
 template <typename T> bool sameMessage(const T &left, const T &right)
 {
     return std::memcmp(&left, &right, sizeof(T)) == 0;
@@ -64,6 +70,7 @@ NodeMutation NodeStore::upsertUser(NodeId id, uint8_t channel, uint32_t lastHear
     auto [it, inserted] = nodes.try_emplace(id);
     auto &record = it->second;
     uint32_t changed = NodeFieldNone;
+    const bool keyChanged = record.hasUser && !samePublicKey(record.user, user);
 
     if (inserted) {
         record.id = id;
@@ -81,9 +88,12 @@ NodeMutation NodeStore::upsertUser(NodeId id, uint8_t channel, uint32_t lastHear
     }
     const bool hasKey = user.public_key.size != 0;
     const bool unmessagable = user.has_is_unmessagable && user.is_unmessagable;
-    if (record.hasKey != hasKey || record.unmessagable != unmessagable || record.viaMqtt != viaMqtt) {
+    const bool keyPresenceChanged = record.hasKey != hasKey;
+    if (keyPresenceChanged || record.unmessagable != unmessagable || record.viaMqtt != viaMqtt || keyChanged) {
         record.hasKey = hasKey;
-        record.hasBadKey = false;
+        if (keyPresenceChanged || keyChanged) {
+            record.hasBadKey = false;
+        }
         record.unmessagable = unmessagable;
         record.viaMqtt = viaMqtt;
         changed |= NodeFieldFlags;
@@ -140,7 +150,7 @@ NodeMutation NodeStore::upsertUnknown(NodeId id, uint8_t channel, uint32_t lastH
 NodeMutation NodeStore::updatePosition(NodeId id, const NodePosition &position)
 {
     auto it = nodes.find(id);
-    if (it == nodes.end() || samePosition(it->second.position, position))
+    if (it == nodes.end() || !position.hasCoordinates() || samePosition(it->second.position, position))
         return unchanged(id);
     it->second.position = position;
     return updated(id, NodeFieldPosition);
@@ -151,10 +161,15 @@ NodeMutation NodeStore::updateDeviceMetrics(NodeId id, const meshtastic_DeviceMe
     auto it = nodes.find(id);
     if (it == nodes.end())
         return unchanged(id);
-    if (it->second.hasDeviceMetrics && sameMessage(it->second.deviceMetrics, metrics))
+    auto retainedMetrics = metrics;
+    if (it->second.hasDeviceMetrics && metrics.battery_level == 0 && metrics.voltage == 0.0f) {
+        retainedMetrics.battery_level = it->second.deviceMetrics.battery_level;
+        retainedMetrics.voltage = it->second.deviceMetrics.voltage;
+    }
+    if (it->second.hasDeviceMetrics && sameMessage(it->second.deviceMetrics, retainedMetrics))
         return unchanged(id);
     it->second.hasDeviceMetrics = true;
-    it->second.deviceMetrics = metrics;
+    it->second.deviceMetrics = retainedMetrics;
     return updated(id, NodeFieldDeviceMetrics);
 }
 
@@ -163,10 +178,17 @@ NodeMutation NodeStore::updateEnvironmentMetrics(NodeId id, const meshtastic_Env
     auto it = nodes.find(id);
     if (it == nodes.end())
         return unchanged(id);
-    if (it->second.hasEnvironmentMetrics && sameMessage(it->second.environmentMetrics, metrics))
+    auto retainedMetrics = metrics;
+    if (it->second.hasEnvironmentMetrics && (metrics.iaq == 0 || metrics.iaq >= 1000) && it->second.environmentMetrics.iaq > 0 &&
+        it->second.environmentMetrics.iaq < 1000) {
+        retainedMetrics.iaq = it->second.environmentMetrics.iaq;
+        retainedMetrics.voltage = it->second.environmentMetrics.voltage;
+        retainedMetrics.current = it->second.environmentMetrics.current;
+    }
+    if (it->second.hasEnvironmentMetrics && sameMessage(it->second.environmentMetrics, retainedMetrics))
         return unchanged(id);
     it->second.hasEnvironmentMetrics = true;
-    it->second.environmentMetrics = metrics;
+    it->second.environmentMetrics = retainedMetrics;
     return updated(id, NodeFieldEnvironmentMetrics);
 }
 

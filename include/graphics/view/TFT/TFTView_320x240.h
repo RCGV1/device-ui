@@ -7,8 +7,10 @@
 #include "graphics/view/TFT/VirtualNodeList.h"
 #endif
 #include "meshtastic/clientonly.pb.h"
+#include <array>
 #include <memory>
 #include <set>
+#include <string>
 
 class MapPanel;
 
@@ -101,6 +103,16 @@ class TFTView_320x240 : public MeshtasticView
     const NodeRecord *nodeRecord(NodeId id) const { return nodeStore.find(id); }
     const NodeStore &getNodeStore(void) const { return nodeStore; }
     const VisibleNodeIndex &getVisibleNodes(void) const { return visibleNodes; }
+
+#if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH)
+    void startNodeListHardwareBenchmark();
+    void advanceNodeListHardwareBenchmark();
+    bool nodeListHardwareBenchmarkComplete() const;
+    const char *nodeListHardwareBenchmarkReport() const;
+#endif
+#if defined(DEVICE_UI_MUI_VIRTUAL_NODE_LIST) && defined(DEVICE_UI_MUI_NODE_LIST_DEMO_FIXTURES)
+    void startNodeListDemoFixtures();
+#endif
 
 #ifdef UNIT_TEST
     lv_obj_t *nodeListRootForTesting(void) const;
@@ -320,13 +332,81 @@ class TFTView_320x240 : public MeshtasticView
     NodeListFilter currentNodeListFilter(void) const;
     void syncVisibleNodeIndex(void);
     void syncNodeListPresentation(void);
+    void syncNodeListPresentation(bool forceRebind);
+    void syncNodeListPresentation(const NodeMutation &mutation);
     bool shouldMaintainNodeModel(void) const;
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
     void ensureVirtualNodeList(void);
+    bool mutationCanRefreshVirtualRow(const NodeMutation &mutation) const;
+    bool refreshVirtualNodePresentation(NodeId id);
     void nodeClicked(NodeId id) override;
     void nodeLongPressed(NodeId id) override;
     void nodeFocused(NodeId id) override;
+    void nodeFocusBoundary(bool forward) override;
     void nodePositionClicked(NodeId id) override;
+#endif
+#if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH)
+    enum class NodeListHardwareBenchmarkState : uint8_t { Idle, ReplaySettle, SeedPending, Warmup, MeasureForward, Report, Done };
+
+    enum class NodeListHardwareBenchmarkGestureResult : uint8_t { Running, Complete, Failed };
+
+    enum class NodeListHardwareBenchmarkGesturePhase : uint8_t { Idle, Trace, Settle };
+
+    struct NodeListHardwareBenchmarkMemory {
+        uint32_t lvglFree = 0;
+        uint8_t lvglUsedPct = 0;
+        uint32_t heapInternal = 0;
+        uint32_t heapPsram = 0;
+    };
+
+    struct NodeListHardwareBenchmarkPointerState {
+        lv_point_t point{};
+        lv_point_t lastDeliveredPoint{};
+        bool pressed = false;
+        bool pending = false;
+        bool syntheticActive = false;
+        bool lastDeliveredPressed = false;
+        bool hasLastDelivered = false;
+    };
+
+    struct NodeListHardwareBenchmarkGesture {
+        NodeListHardwareBenchmarkGesturePhase phase = NodeListHardwareBenchmarkGesturePhase::Idle;
+        bool measuring = false;
+        bool dragUp = true;
+        bool finalRefreshDone = false;
+        uint8_t traceIndex = 0;
+        uint8_t stableFrames = 0;
+        uint8_t settleTicks = 0;
+        bool movementExpected = false;
+        int16_t x = 0;
+        int16_t startY = 0;
+        int16_t endY = 0;
+        int32_t startScrollY = 0;
+        int32_t endScrollY = 0;
+        int32_t lastScrollY = 0;
+        uint32_t lastStepMs = 0;
+        uint32_t startUs = 0;
+    };
+
+    uint32_t nodeListHardwareBenchmarkReplayStartMs = 0;
+
+    static void nodeListHardwareBenchmarkPointerRead(lv_indev_t *indev, lv_indev_data_t *data);
+    static void nodeListHardwareBenchmarkRefreshEvent(lv_event_t *event);
+    bool registerNodeListHardwareBenchmarkPointer();
+    void unregisterNodeListHardwareBenchmarkPointer();
+    void captureNodeListHardwareBenchmarkMemory(NodeListHardwareBenchmarkMemory &memory) const;
+    lv_obj_t *nodeListHardwareBenchmarkGestureTarget() const;
+    bool nodeListHardwareBenchmarkGestureArea(lv_area_t &area) const;
+    bool injectNodeListHardwareBenchmarkPointer(int16_t x, int16_t y, bool pressed);
+    bool releaseNodeListHardwareBenchmarkPointer();
+    NodeListHardwareBenchmarkGestureResult advanceNodeListHardwareBenchmarkGesture(bool measuring, bool dragUp);
+    void publishNodeListHardwareBenchmarkProgress();
+    void finishNodeListHardwareBenchmarkReport();
+#endif
+#if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH) ||                                                                                 \
+    (defined(DEVICE_UI_MUI_VIRTUAL_NODE_LIST) && defined(DEVICE_UI_MUI_NODE_LIST_DEMO_FIXTURES))
+    void clearNodeListHardwareBenchmarkPresentation();
+    void seedNodeListHardwareBenchmarkFixtures();
 #endif
     void updateGroupChannel(uint8_t chId);
 
@@ -571,5 +651,39 @@ class TFTView_320x240 : public MeshtasticView
     lv_obj_t *virtualNodeListHost = nullptr;
     std::unique_ptr<VirtualNodeList> virtualNodeList;
     bool useVirtualNodeList = false;
+#endif
+#if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH)
+    static constexpr size_t nodeListHardwareBenchmarkFixtureCount = 250;
+    static constexpr size_t nodeListHardwareBenchmarkWarmupGestures = 3;
+    static constexpr size_t nodeListHardwareBenchmarkSampleTarget = 40;
+    static constexpr size_t nodeListHardwareBenchmarkMaxSamples = nodeListHardwareBenchmarkSampleTarget;
+
+    NodeListHardwareBenchmarkState nodeListHardwareBenchmarkState = NodeListHardwareBenchmarkState::Idle;
+    std::array<uint32_t, nodeListHardwareBenchmarkMaxSamples> nodeListHardwareBenchmarkSamples{};
+    size_t nodeListHardwareBenchmarkSampleCount = 0;
+    size_t nodeListHardwareBenchmarkGestureIndex = 0;
+    size_t nodeListHardwareBenchmarkMovementCount = 0;
+    uint32_t nodeListHardwareBenchmarkStartUs = 0;
+    uint32_t nodeListHardwareBenchmarkElapsedUs = 0;
+    uint32_t nodeListHardwareBenchmarkRefreshStartUs = 0;
+    uint32_t nodeListHardwareBenchmarkRefreshTotalUs = 0;
+    uint32_t nodeListHardwareBenchmarkRefreshWorstUs = 0;
+    uint32_t nodeListHardwareBenchmarkRefreshCount = 0;
+    lv_indev_t *nodeListHardwareBenchmarkPointer = nullptr;
+    NodeListHardwareBenchmarkPointerState nodeListHardwareBenchmarkPointerState{};
+    NodeListHardwareBenchmarkGesture nodeListHardwareBenchmarkGesture{};
+    bool nodeListHardwareBenchmarkStarted = false;
+    bool nodeListHardwareBenchmarkAwaitingScreensLogged = false;
+    bool nodeListHardwareBenchmarkPrinted = false;
+    bool nodeListHardwareBenchmarkPointerRegistered = false;
+    bool nodeListHardwareBenchmarkMemoryAfterCaptured = false;
+    bool nodeListHardwareBenchmarkRefreshEventsRegistered = false;
+    std::string nodeListHardwareBenchmarkFailureReason;
+    NodeListHardwareBenchmarkMemory nodeListHardwareBenchmarkMemoryBefore{};
+    NodeListHardwareBenchmarkMemory nodeListHardwareBenchmarkMemoryAfter{};
+    std::string nodeListHardwareBenchmarkReportLine;
+#endif
+#if defined(DEVICE_UI_MUI_VIRTUAL_NODE_LIST) && defined(DEVICE_UI_MUI_NODE_LIST_DEMO_FIXTURES)
+    bool nodeListDemoFixturesStarted = false;
 #endif
 };

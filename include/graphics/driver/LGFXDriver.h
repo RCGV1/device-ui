@@ -9,6 +9,10 @@
 #include "util/ISpiLock.h"
 #include <functional>
 
+#if defined(DEVICE_UI_MUI_VIRTUAL_NODE_LIST) && defined(ARDUINO) && !defined(ARCH_PORTDUINO)
+void PowerFSM_notifyInput();
+#endif
+
 constexpr uint32_t defaultLongPressTime = 700; // ms until long press is detected (lvgl default is 400)
 constexpr uint32_t defaultGestureLimit = 10;   // x/y diff pixel until a swipe gesture is detected (lvgl default is 50)
 
@@ -250,6 +254,9 @@ template <class LGFX> void LGFXDriver<LGFX>::touchpad_read(lv_indev_t *indev_dri
     if (!touched) {
         data->state = LV_INDEV_STATE_REL;
     } else {
+#if defined(DEVICE_UI_MUI_VIRTUAL_NODE_LIST) && defined(ARDUINO) && !defined(ARCH_PORTDUINO)
+        PowerFSM_notifyInput();
+#endif
         data->state = LV_INDEV_STATE_PR;
         data->point.x = touchX;
         data->point.y = touchY;

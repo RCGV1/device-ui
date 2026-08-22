@@ -1,10 +1,14 @@
 #include "graphics/view/TFT/VirtualNodeList.h"
 
+#include "core/lv_group_private.h"
 #include "fonts.h"
+#include "graphics/common/NodeListRowPresentation.h"
 #include "images.h"
+#include "lv_i18n.h"
 #include "styles.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -14,7 +18,11 @@
 namespace
 {
 VirtualNodeList *activeGroupNavigationList = nullptr;
-constexpr int32_t LEGACY_NODE_LIST_RIGHT_GUTTER = 59;
+const lv_color_t highlightOrange = lv_color_hex(0xff8c04);
+const lv_color_t highlightBlueGreen = lv_color_hex(0x05f6cb);
+const lv_color_t highlightBlue = lv_color_hex(0x436c70);
+const lv_color_t highlightMidGray = lv_color_hex(0x808080);
+const lv_color_t highlightMesh = lv_color_hex(0x67ea94);
 
 template <size_t Size> void setRowText(lv_obj_t *label, char (&storage)[Size], const char *text)
 {
@@ -31,7 +39,7 @@ void formatLastHeard(uint32_t lastHeard, uint32_t currentTime, char *buffer, siz
 
     const uint32_t age = currentTime > lastHeard ? currentTime - lastHeard : 0;
     if (age < 60) {
-        std::snprintf(buffer, bufferSize, "now");
+        std::snprintf(buffer, bufferSize, _("now"));
     } else if (age < 3600) {
         std::snprintf(buffer, bufferSize, "%u min", age / 60);
     } else if (age < 86400) {
@@ -52,65 +60,99 @@ void setHidden(lv_obj_t *obj, bool hidden)
     }
 }
 
-std::tuple<uint32_t, uint32_t> nodeColor(NodeId nodeNum)
+void clearRowBinding(ReusableRow &row)
 {
-    uint32_t red = (nodeNum & 0xff0000) >> 16;
-    uint32_t green = (nodeNum & 0xff00) >> 8;
-    uint32_t blue = nodeNum & 0xff;
-    while (red + green + blue < 0xF0) {
-        red += red / 3 + 10;
-        green += green / 3 + 10;
-        blue += blue / 3 + 10;
+    row.boundId = 0;
+    row.pressedId = 0;
+    if (row.panel) {
+        lv_obj_set_user_data(row.panel, nullptr);
+    }
+    if (row.btn) {
+        lv_obj_set_user_data(row.btn, nullptr);
+    }
+    if (row.lblPos1) {
+        lv_obj_set_user_data(row.lblPos1, nullptr);
+    }
+}
+
+void moveGroupButtonToHead(lv_group_t *group, lv_obj_t *button)
+{
+    if (!group || !button) {
+        return;
     }
 
-    return std::make_tuple((red << 16) | (green << 8) | blue, (2 * red + 2 * green + blue) > 600 ? 0x000000 : 0xFFFFFF);
+    lv_obj_t **buttonNode = nullptr;
+    lv_obj_t **head = static_cast<lv_obj_t **>(lv_ll_get_head(&group->obj_ll));
+    if (head && *head == button) {
+        return;
+    }
+
+    for (void *nodePtr = lv_ll_get_head(&group->obj_ll); nodePtr; nodePtr = lv_ll_get_next(&group->obj_ll, nodePtr)) {
+        auto **node = static_cast<lv_obj_t **>(nodePtr);
+        if (*node == button) {
+            buttonNode = node;
+            break;
+        }
+    }
+
+    if (buttonNode && head) {
+        lv_ll_move_before(&group->obj_ll, buttonNode, head);
+    }
+}
+
+void moveGroupButtonToTail(lv_group_t *group, lv_obj_t *button)
+{
+    if (!group || !button) {
+        return;
+    }
+
+    auto **tail = static_cast<lv_obj_t **>(lv_ll_get_tail(&group->obj_ll));
+    if (tail && *tail == button) {
+        return;
+    }
+
+    for (void *nodePtr = lv_ll_get_head(&group->obj_ll); nodePtr; nodePtr = lv_ll_get_next(&group->obj_ll, nodePtr)) {
+        auto **node = static_cast<lv_obj_t **>(nodePtr);
+        if (*node == button) {
+            lv_ll_move_before(&group->obj_ll, node, nullptr);
+            return;
+        }
+    }
 }
 
 void setRoleImage(const NodeRecord &record, lv_obj_t *img)
 {
-    uint32_t bgColor = 0;
-    uint32_t fgColor = 0;
-    std::tie(bgColor, fgColor) = nodeColor(record.id);
-
+    const void *source = &img_node_client_image;
     if (record.unmessagable) {
-        lv_image_set_src(img, &img_unmessagable_image);
-        lv_obj_set_style_border_color(img, lv_color_hex(bgColor), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_color(img, lv_color_hex(0x202020), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_image_recolor(img, lv_color_hex(0xff5555), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_image_recolor_opa(img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-        return;
+        source = &img_unmessagable_image;
+    } else {
+        switch (record.user.role) {
+        case meshtastic_Config_DeviceConfig_Role_ROUTER:
+        case meshtastic_Config_DeviceConfig_Role_REPEATER:
+        case meshtastic_Config_DeviceConfig_Role_ROUTER_LATE:
+            source = &img_node_router_image;
+            break;
+        case meshtastic_Config_DeviceConfig_Role_ROUTER_CLIENT:
+            source = &img_top_nodes_image;
+            break;
+        case meshtastic_Config_DeviceConfig_Role_TRACKER:
+        case meshtastic_Config_DeviceConfig_Role_SENSOR:
+        case meshtastic_Config_DeviceConfig_Role_LOST_AND_FOUND:
+        case meshtastic_Config_DeviceConfig_Role_TAK_TRACKER:
+            source = &img_node_sensor_image;
+            break;
+        case meshtastic_Config_DeviceConfig_Role_CLIENT:
+        case meshtastic_Config_DeviceConfig_Role_CLIENT_MUTE:
+        case meshtastic_Config_DeviceConfig_Role_CLIENT_HIDDEN:
+        case meshtastic_Config_DeviceConfig_Role_TAK:
+            source = &img_node_client_image;
+            break;
+        default:
+            source = record.hasUser ? &img_node_client_image : &img_circle_question_image;
+            break;
+        }
     }
-
-    lv_obj_remove_local_style_prop(img, LV_STYLE_IMAGE_RECOLOR, LV_PART_MAIN | LV_STATE_DEFAULT);
-
-    switch (record.user.role) {
-    case meshtastic_Config_DeviceConfig_Role_ROUTER:
-    case meshtastic_Config_DeviceConfig_Role_REPEATER:
-    case meshtastic_Config_DeviceConfig_Role_ROUTER_LATE:
-        lv_image_set_src(img, &img_node_router_image);
-        break;
-    case meshtastic_Config_DeviceConfig_Role_ROUTER_CLIENT:
-        lv_image_set_src(img, &img_top_nodes_image);
-        break;
-    case meshtastic_Config_DeviceConfig_Role_TRACKER:
-    case meshtastic_Config_DeviceConfig_Role_SENSOR:
-    case meshtastic_Config_DeviceConfig_Role_LOST_AND_FOUND:
-    case meshtastic_Config_DeviceConfig_Role_TAK_TRACKER:
-        lv_image_set_src(img, &img_node_sensor_image);
-        break;
-    case meshtastic_Config_DeviceConfig_Role_CLIENT:
-    case meshtastic_Config_DeviceConfig_Role_CLIENT_MUTE:
-    case meshtastic_Config_DeviceConfig_Role_CLIENT_HIDDEN:
-    case meshtastic_Config_DeviceConfig_Role_TAK:
-        lv_image_set_src(img, &img_node_client_image);
-        break;
-    default:
-        lv_image_set_src(img, record.hasUser ? &img_node_client_image : &img_circle_question_image);
-        break;
-    }
-    lv_obj_set_style_image_recolor_opa(img, fgColor ? 0 : 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_color(img, lv_color_hex(bgColor), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_border_color(img, lv_color_hex(bgColor), LV_PART_MAIN | LV_STATE_DEFAULT);
+    NodeListRowPresentation::applyNodeImage(img, record.id, source, record.unmessagable, true);
 }
 
 void formatLegacyShortDisplay(char *dest, size_t destSize, const char *shortName, NodeId nodeId)
@@ -130,8 +172,7 @@ void formatShortName(const NodeRecord &record, const NodeListRenderContext &cont
 {
     formatLegacyShortDisplay(buffer, bufferSize, record.user.short_name, record.id);
 
-    if (!context.hasOwnPosition || !record.position.known || record.id == context.ownNode ||
-        (record.position.latitude == 0 && record.position.longitude == 0) || bufferSize < 6) {
+    if (!context.hasOwnPosition || !record.position.hasCoordinates() || record.id == context.ownNode || bufferSize < 6) {
         return;
     }
 
@@ -173,6 +214,7 @@ VirtualNodeList::VirtualNodeList(lv_obj_t *parent, NodeListActionSink &sink) : p
 
 VirtualNodeList::~VirtualNodeList()
 {
+    lv_anim_delete(this, expansionAnimationCallback);
     detachGroupNavigation();
     if (parentPanel) {
         lv_obj_remove_event_cb(parentPanel, scrollEventCallback);
@@ -221,8 +263,6 @@ void VirtualNodeList::createRowPool()
         lv_obj_set_style_pad_bottom(row.panel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_remove_flag(row.panel, static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE));
         add_style_node_panel_style(row.panel);
-        lv_obj_set_style_radius(row.panel, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_color(row.panel, lv_color_hex(0xfffff4), LV_PART_MAIN | LV_STATE_PRESSED);
 
         row.img = lv_image_create(row.panel);
         lv_obj_set_pos(row.img, -5, 3);
@@ -236,7 +276,8 @@ void VirtualNodeList::createRowPool()
         lv_obj_set_style_bg_color(row.img, lv_color_hex(0x5d9388), LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_bg_opa(row.img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_border_color(row.img, lv_color_hex(0xff5555), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_border_width(row.img, 3, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_opa(row.img, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(row.img, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
 
         row.btn = lv_button_create(row.panel);
         lv_obj_set_pos(row.btn, 0, 0);
@@ -258,6 +299,7 @@ void VirtualNodeList::createRowPool()
         row.lblShort = lv_label_create(row.panel);
         lv_obj_set_pos(row.lblShort, 30, 10);
         lv_obj_set_size(row.lblShort, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_label_set_long_mode(row.lblShort, LV_LABEL_LONG_WRAP);
         lv_obj_remove_flag(row.lblShort, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_style_align(row.lblShort, LV_ALIGN_TOP_LEFT, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_text_font(row.lblShort, &ui_font_montserrat_14, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -279,9 +321,9 @@ void VirtualNodeList::createRowPool()
         lv_obj_set_style_text_align(row.lblLh, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
 
         row.lblSig = lv_label_create(row.panel);
+        lv_obj_set_width(row.lblSig, LV_SIZE_CONTENT);
+        lv_obj_set_height(row.lblSig, LV_SIZE_CONTENT);
         lv_obj_set_pos(row.lblSig, 8, 1);
-        lv_obj_set_size(row.lblSig, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-        lv_label_set_long_mode(row.lblSig, LV_LABEL_LONG_CLIP);
         lv_obj_remove_flag(row.lblSig, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_style_align(row.lblSig, LV_ALIGN_TOP_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_text_align(row.lblSig, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -293,7 +335,6 @@ void VirtualNodeList::createRowPool()
         lv_obj_remove_flag(row.lblPos1, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_style_align(row.lblPos1, LV_ALIGN_TOP_LEFT, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_text_color(row.lblPos1, lv_color_hex(0x05f6cb), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_add_flag(row.lblPos1, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(row.lblPos1, rowPositionCallback, LV_EVENT_CLICKED, this);
         lv_obj_add_flag(row.lblPos1, LV_OBJ_FLAG_HIDDEN);
 
@@ -342,11 +383,6 @@ void VirtualNodeList::attachGroupNavigation()
         return;
     }
 
-    for (auto &row : rowPool) {
-        if (row.btn) {
-            lv_group_add_obj(attachedGroup, row.btn);
-        }
-    }
     activeGroupNavigationList = this;
     lv_group_set_wrap(attachedGroup, false);
     lv_group_set_edge_cb(attachedGroup, groupEdgeCallback);
@@ -371,48 +407,250 @@ void VirtualNodeList::detachGroupNavigation()
 void VirtualNodeList::updateVirtualContentHeight()
 {
     if (!currentIndex) {
-        prefixHeights.clear();
         return;
     }
 
     const auto &ids = currentIndex->ids();
-    prefixHeights.resize(ids.size() + 1);
-    prefixHeights[0] = 0;
-
-    int32_t currentY = 0;
-    for (size_t i = 0; i < ids.size(); ++i) {
-        prefixHeights[i] = currentY;
-        const int32_t h = (ids[i] == expandedId) ? EXPANDED_ROW_HEIGHT : COLLAPSED_ROW_HEIGHT;
-        currentY += h;
-    }
-    prefixHeights[ids.size()] = currentY;
 
     if (spacer) {
-        lv_obj_set_size(spacer, 1, currentY > 0 ? currentY : 1);
+        const int32_t height = rowY(ids.size());
+        lv_obj_set_size(spacer, 1, height > 0 ? height : 1);
         lv_obj_set_pos(spacer, 0, 0);
     }
 }
 
-void VirtualNodeList::sync(const NodeStore &store, const VisibleNodeIndex &index, NodeId expanded, uint32_t now,
-                           const NodeListRenderContext &context)
+void VirtualNodeList::updateExpandedIndexCache()
 {
+    expandedIndex = std::numeric_limits<size_t>::max();
+    previousExpandedIndex = std::numeric_limits<size_t>::max();
+
+    if (!currentIndex) {
+        return;
+    }
+
+    const auto cacheIndex = [this](NodeId id) {
+        if (!id) {
+            return std::numeric_limits<size_t>::max();
+        }
+#ifdef UNIT_TEST
+        ++expandedIndexScanCount;
+#endif
+        const auto position = currentIndex->indexOf(id);
+        return position.value_or(std::numeric_limits<size_t>::max());
+    };
+
+    expandedIndex = cacheIndex(expandedId);
+    if (previousExpandedId != expandedId) {
+        previousExpandedIndex = cacheIndex(previousExpandedId);
+    }
+}
+
+VirtualNodeList::ScrollAnchor VirtualNodeList::captureScrollAnchor() const
+{
+    if (!parentPanel) {
+        return {};
+    }
+
+    const int32_t scrollY = std::max<int32_t>(0, static_cast<int32_t>(lv_obj_get_scroll_y(parentPanel)));
+    if (scrollY == 0) {
+        return {};
+    }
+    const ReusableRow *anchorRow = nullptr;
+    for (const auto &row : rowPool) {
+        if (!row.boundId || !row.panel || lv_obj_has_flag(row.panel, LV_OBJ_FLAG_HIDDEN) || row.renderedY > scrollY) {
+            continue;
+        }
+        if (!anchorRow || row.renderedY > anchorRow->renderedY) {
+            anchorRow = &row;
+        }
+    }
+
+    if (!anchorRow) {
+        return {};
+    }
+    return {anchorRow->boundId, scrollY - anchorRow->renderedY};
+}
+
+void VirtualNodeList::restoreScrollAnchor(const ScrollAnchor &anchor)
+{
+    if (!parentPanel || !currentIndex || !anchor.id) {
+        return;
+    }
+
+    const auto position = currentIndex->indexOf(anchor.id);
+    if (position.has_value()) {
+        lv_obj_scroll_to_y(parentPanel, rowY(position.value()) + anchor.offset, LV_ANIM_OFF);
+    }
+}
+
+void VirtualNodeList::sync(const NodeStore &store, const VisibleNodeIndex &index, NodeId expanded, uint32_t now,
+                           const NodeListRenderContext &context, bool forceRebind)
+{
+    const uint32_t nextTime = now != 0 ? now : static_cast<uint32_t>(std::time(nullptr));
+    const bool indexChanged = currentIndex != &index || lastSyncedIndexGeneration != index.generation();
+    const bool timeChanged = currentTime != nextTime;
+    const bool contextChanged =
+        renderContext.ownNode != context.ownNode || renderContext.hasOwnPosition != context.hasOwnPosition ||
+        renderContext.ownLatitude != context.ownLatitude || renderContext.ownLongitude != context.ownLongitude ||
+        renderContext.metricUnits != context.metricUnits || renderContext.highlightActiveChat != context.highlightActiveChat ||
+        renderContext.highlightPosition != context.highlightPosition ||
+        renderContext.highlightTelemetry != context.highlightTelemetry || renderContext.highlightIaq != context.highlightIaq ||
+        std::strcmp(renderContext.highlightName, context.highlightName) != 0;
+    const ScrollAnchor scrollAnchor = indexChanged ? captureScrollAnchor() : ScrollAnchor{};
     currentStore = &store;
     currentIndex = &index;
-    expandedId = expanded;
-    currentTime = now != 0 ? now : static_cast<uint32_t>(std::time(nullptr));
+    requestExpanded(expanded);
+    updateExpandedIndexCache();
+    currentTime = nextTime;
     renderContext = context;
 
+    const bool rebindVisibleRows = forceRebind || timeChanged || contextChanged;
     updateVirtualContentHeight();
-    refreshVisibleRows();
+    if (indexChanged) {
+        restoreScrollAnchor(scrollAnchor);
+    }
+    refreshVisibleRows(indexChanged || rebindVisibleRows, rebindVisibleRows);
+    lastSyncedIndexGeneration = index.generation();
 }
 
 void VirtualNodeList::setExpanded(NodeId id)
 {
-    if (expandedId != id) {
-        expandedId = id;
-        updateVirtualContentHeight();
-        refreshVisibleRows();
+    requestExpanded(id);
+}
+
+int32_t VirtualNodeList::rowHeight(NodeId id) const
+{
+    if (!expansionAnimationActive) {
+        return id == expandedId ? EXPANDED_ROW_HEIGHT : COLLAPSED_ROW_HEIGHT;
     }
+    if (id == expandedId && expandedId != 0) {
+        return COLLAPSED_ROW_HEIGHT + (EXPANDED_ROW_HEIGHT - COLLAPSED_ROW_HEIGHT) * expansionProgress / 100;
+    }
+    if (id == previousExpandedId && previousExpandedId != 0) {
+        return EXPANDED_ROW_HEIGHT - (EXPANDED_ROW_HEIGHT - COLLAPSED_ROW_HEIGHT) * expansionProgress / 100;
+    }
+    return COLLAPSED_ROW_HEIGHT;
+}
+
+int32_t VirtualNodeList::rowY(size_t index) const
+{
+    if (!currentIndex) {
+        return 0;
+    }
+
+    const auto &ids = currentIndex->ids();
+    const size_t count = ids.size();
+    int32_t y = static_cast<int32_t>(index * (COLLAPSED_ROW_HEIGHT + ROW_GAP));
+    if (index == count && count > 0) {
+        y -= ROW_GAP;
+    }
+
+    const auto addExpandedDelta = [&](NodeId id, size_t position) {
+        if (!id || position == std::numeric_limits<size_t>::max()) {
+            return;
+        }
+        if (position < index) {
+            y += rowHeight(id) - COLLAPSED_ROW_HEIGHT;
+        }
+    };
+    addExpandedDelta(expandedId, expandedIndex);
+    if (previousExpandedId != expandedId) {
+        addExpandedDelta(previousExpandedId, previousExpandedIndex);
+    }
+    return y;
+}
+
+size_t VirtualNodeList::firstVisibleIndex(int32_t scrollY) const
+{
+    if (!currentIndex || currentIndex->ids().empty()) {
+        return 0;
+    }
+
+    const size_t count = currentIndex->ids().size();
+    size_t first = 0;
+    size_t last = count;
+    while (first < last) {
+        const size_t middle = first + (last - first) / 2;
+        if (rowY(middle + 1) <= scrollY) {
+            first = middle + 1;
+        } else {
+            last = middle;
+        }
+    }
+    return first;
+}
+
+bool VirtualNodeList::rowShowsExpandedDetails(NodeId id) const
+{
+    return id != 0 && (id == expandedId || (expansionAnimationActive && id == previousExpandedId));
+}
+
+void VirtualNodeList::requestExpanded(NodeId id)
+{
+    if (expansionAnimationActive) {
+        if (id != expandedId) {
+            pendingExpandedId = id;
+            hasPendingExpandedId = true;
+        } else {
+            pendingExpandedId = 0;
+            hasPendingExpandedId = false;
+        }
+        updateExpandedIndexCache();
+        updateVirtualContentHeight();
+        refreshVisibleRows(true, false);
+        return;
+    }
+
+    if (id == expandedId) {
+        return;
+    }
+
+    hasPendingExpandedId = false;
+    previousExpandedId = expandedId;
+    expandedId = id;
+    expansionProgress = 0;
+    expansionAnimationActive = true;
+    updateExpandedIndexCache();
+
+    lv_anim_t animation;
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, this);
+    lv_anim_set_values(&animation, 0, 100);
+    lv_anim_set_duration(&animation, 200);
+    lv_anim_set_path_cb(&animation, lv_anim_path_linear);
+    lv_anim_set_exec_cb(&animation, expansionAnimationCallback);
+    lv_anim_set_completed_cb(&animation, expansionAnimationFinished);
+    lv_anim_start(&animation);
+
+    updateVirtualContentHeight();
+    refreshVisibleRows(true, true);
+}
+
+void VirtualNodeList::updateExpansionAnimation(int32_t progress)
+{
+    expansionProgress = progress;
+    updateVirtualContentHeight();
+    refreshVisibleRows(true, false);
+}
+
+void VirtualNodeList::finishExpansionAnimation()
+{
+    expansionProgress = 100;
+    expansionAnimationActive = false;
+    previousExpandedId = 0;
+    updateExpandedIndexCache();
+
+    if (hasPendingExpandedId) {
+        const NodeId nextExpandedId = pendingExpandedId;
+        hasPendingExpandedId = false;
+        if (nextExpandedId != expandedId) {
+            requestExpanded(nextExpandedId);
+            return;
+        }
+    }
+
+    updateVirtualContentHeight();
+    refreshVisibleRows(true, true);
 }
 
 void VirtualNodeList::scrollTo(NodeId id, lv_anim_enable_t anim)
@@ -426,11 +664,8 @@ void VirtualNodeList::scrollTo(NodeId id, lv_anim_enable_t anim)
     }
 
     const size_t idx = optIdx.value();
-    if (idx < prefixHeights.size()) {
-        const int32_t targetY = prefixHeights[idx];
-        lv_obj_scroll_to_y(parentPanel, targetY, anim);
-        refreshVisibleRows();
-    }
+    lv_obj_scroll_to_y(parentPanel, rowY(idx), anim);
+    refreshVisibleRows();
 }
 
 void VirtualNodeList::focus(NodeId id)
@@ -489,18 +724,35 @@ bool VirtualNodeList::focusAdjacent(NodeId id, int direction)
 
 void VirtualNodeList::handleGroupEdge(bool forward)
 {
-    if (lastFocusedId == 0) {
+    NodeId focusedId = lastFocusedId;
+    if (attachedGroup) {
+        lv_obj_t *focused = lv_group_get_focused(attachedGroup);
+        const size_t poolIndex = poolIndexForButton(focused);
+        if (poolIndex < rowPool.size() && rowPool[poolIndex].boundId != 0) {
+            focusedId = rowPool[poolIndex].boundId;
+            lastFocusedId = focusedId;
+        }
+    }
+
+    if (focusedId == 0) {
+        actionSink.nodeFocusBoundary(forward);
         return;
     }
 
     redirectingGroupFocus = true;
-    focusAdjacent(lastFocusedId, forward ? 1 : -1);
+    const bool moved = focusAdjacent(focusedId, forward ? 1 : -1);
     redirectingGroupFocus = false;
+    if (!moved) {
+        actionSink.nodeFocusBoundary(forward);
+    }
 }
 
 void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool isExpanded)
 {
     bindGeneration++;
+    if (attachedGroup && row.btn && lv_obj_get_group(row.btn) != attachedGroup) {
+        lv_group_add_obj(attachedGroup, row.btn);
+    }
     row.boundId = record.id;
     lv_obj_set_user_data(row.panel, reinterpret_cast<void *>(static_cast<uintptr_t>(record.id)));
     lv_obj_set_user_data(row.btn, reinterpret_cast<void *>(static_cast<uintptr_t>(record.id)));
@@ -530,29 +782,27 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     formatLastHeard(record.lastHeard, currentTime, row.lastHeardText, sizeof(row.lastHeardText));
     lv_label_set_text_static(row.lblLh, row.lastHeardText);
 
-    if (record.signalDisplay == NodeSignalDisplayKind::Hops && record.hopsAway >= 0) {
-        std::snprintf(row.signalText, sizeof(row.signalText), "hops: %d", static_cast<int>(record.hopsAway));
+    if (record.id == renderContext.ownNode && record.hasDeviceMetrics) {
+        std::snprintf(row.signalText, sizeof(row.signalText), _("Util %0.1f%%  Air %0.1f%%"),
+                      record.deviceMetrics.channel_utilization, record.deviceMetrics.air_util_tx);
+    } else if (record.signalDisplay == NodeSignalDisplayKind::Hops && record.hopsAway >= 0) {
+        std::snprintf(row.signalText, sizeof(row.signalText), _("hops: %d"), static_cast<int>(record.hopsAway));
     } else if (record.signalDisplay == NodeSignalDisplayKind::Rssi && (record.rssi != 0 || record.snr != 0.0f)) {
         std::snprintf(row.signalText, sizeof(row.signalText), "rssi: %d snr: %.1f", static_cast<int>(record.rssi), record.snr);
     } else {
         row.signalText[0] = '\0';
     }
+    lv_label_set_text_static(row.lblSig, "");
     lv_label_set_text_static(row.lblSig, row.signalText);
-
-    const int32_t height = isExpanded ? EXPANDED_ROW_HEIGHT : COLLAPSED_ROW_HEIGHT;
-    const int32_t parentWidth = parentPanel ? lv_obj_get_width(parentPanel) : 0;
-    lv_obj_set_size(row.panel,
-                    parentWidth > LEGACY_NODE_LIST_RIGHT_GUTTER ? parentWidth - LEGACY_NODE_LIST_RIGHT_GUTTER : lv_pct(100),
-                    height);
-    lv_obj_update_layout(row.panel);
+    lv_obj_set_width(row.lblSig, LV_SIZE_CONTENT);
+    lv_obj_set_height(row.lblSig, LV_SIZE_CONTENT);
 
     row.positionText[0] = '\0';
     row.position2Text[0] = '\0';
     row.telemetry1Text[0] = '\0';
     row.telemetry2Text[0] = '\0';
 
-    const bool showPosition =
-        isExpanded && record.position.known && (record.position.latitude != 0 || record.position.longitude != 0);
+    const bool showPosition = isExpanded && record.position.hasCoordinates();
     if (showPosition) {
         int32_t altitude = std::abs(record.position.altitude) < 10000 ? record.position.altitude : 0;
         const char *altitudeUnits = "m";
@@ -566,6 +816,11 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     }
     lv_label_set_text_static(row.lblPos1, row.positionText);
     lv_label_set_text_static(row.lblPos2, row.position2Text);
+    if (showPosition && record.id != renderContext.ownNode) {
+        lv_obj_add_flag(row.lblPos1, LV_OBJ_FLAG_CLICKABLE);
+    } else {
+        lv_obj_remove_flag(row.lblPos1, LV_OBJ_FLAG_CLICKABLE);
+    }
     setHidden(row.lblPos1, !showPosition);
     setHidden(row.lblPos2, !showPosition);
 
@@ -606,9 +861,60 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
         setHidden(row.lblTm1, true);
         setHidden(row.lblTm2, true);
     }
+
+    applyHighlight(row, record);
 }
 
-void VirtualNodeList::refreshVisibleRows()
+void VirtualNodeList::applyHighlight(ReusableRow &row, const NodeRecord &record)
+{
+    lv_obj_set_style_border_width(row.panel, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
+    bool highlighted = false;
+    if (renderContext.highlightActiveChat && record.hasActiveChat) {
+        lv_obj_set_style_border_color(row.panel, highlightOrange, LV_PART_MAIN | LV_STATE_DEFAULT);
+        highlighted = true;
+    }
+    if (renderContext.highlightPosition && record.position.hasCoordinates()) {
+        lv_obj_set_style_border_color(row.panel, highlightBlueGreen, LV_PART_MAIN | LV_STATE_DEFAULT);
+        highlighted = true;
+    }
+    if (renderContext.highlightTelemetry && record.hasEnvironmentMetrics) {
+        lv_obj_set_style_border_color(row.panel, highlightBlue, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(row.panel, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+        highlighted = true;
+    }
+    if (renderContext.highlightIaq && record.hasEnvironmentMetrics && record.environmentMetrics.iaq > 0 &&
+        record.environmentMetrics.iaq < 1000) {
+        const uint32_t iaq = record.environmentMetrics.iaq;
+        const lv_color_t color = iaq <= 50    ? lv_color_hex(0x000ce810)
+                                 : iaq <= 100 ? lv_color_hex(0x00faf646)
+                                 : iaq <= 150 ? lv_color_hex(0x00f98204)
+                                 : iaq <= 200 ? lv_color_hex(0x00e42104)
+                                 : iaq <= 300 ? lv_color_hex(0x009b2970)
+                                              : lv_color_hex(0x001d1414);
+        lv_obj_set_style_border_color(row.panel, color, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(row.panel, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_color(row.lblTm2, iaq <= 200 ? lv_color_hex(0x00000000) : lv_color_hex(0xffffffff),
+                                    LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_color(row.lblTm2, color, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_opa(row.lblTm2, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
+        highlighted = true;
+    } else {
+        lv_obj_set_style_bg_opa(row.lblTm2, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_remove_local_style_prop(row.lblTm2, LV_STYLE_TEXT_COLOR, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_remove_local_style_prop(row.lblTm2, LV_STYLE_BG_COLOR, LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
+    const char *name = renderContext.highlightName;
+    if (name[0] != '\0' && (strcasestr(record.user.long_name, name) || strcasestr(record.user.short_name, name))) {
+        lv_obj_set_style_border_color(row.panel, highlightMesh, LV_PART_MAIN | LV_STATE_DEFAULT);
+        highlighted = true;
+    }
+    if (!highlighted) {
+        lv_obj_set_style_border_color(row.panel, highlightMidGray, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(row.panel, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
+}
+
+void VirtualNodeList::refreshVisibleRows(bool force, bool rebind)
 {
     if (!parentPanel || !currentIndex || !currentStore) {
         return;
@@ -618,8 +924,12 @@ void VirtualNodeList::refreshVisibleRows()
     if (ids.empty()) {
         for (auto &row : rowPool) {
             lv_obj_add_flag(row.panel, LV_OBJ_FLAG_HIDDEN);
-            row.boundId = 0;
+            if (attachedGroup && row.btn && lv_obj_get_group(row.btn) == attachedGroup) {
+                lv_group_remove_obj(row.btn);
+            }
+            clearRowBinding(row);
         }
+        firstRenderedIndex = std::numeric_limits<size_t>::max();
         return;
     }
 
@@ -628,9 +938,7 @@ void VirtualNodeList::refreshVisibleRows()
         scrollY = 0;
     }
 
-    // Binary search for first visible row in prefixHeights
-    auto it = std::upper_bound(prefixHeights.begin(), prefixHeights.end(), scrollY);
-    size_t firstIdx = (it != prefixHeights.begin()) ? std::distance(prefixHeights.begin(), it) - 1 : 0;
+    size_t firstIdx = firstVisibleIndex(scrollY);
 
     // Buffer 1 row of overscan above if possible
     if (firstIdx > 0) {
@@ -639,27 +947,177 @@ void VirtualNodeList::refreshVisibleRows()
     if (!ids.empty() && firstIdx >= ids.size()) {
         firstIdx = ids.size() - 1;
     }
+    const size_t previousFirstRenderedIndex = firstRenderedIndex;
+    if (!force && previousFirstRenderedIndex == firstIdx) {
+        return;
+    }
+    firstRenderedIndex = firstIdx;
 
-    for (size_t p = 0; p < POOL_SIZE; ++p) {
-        const size_t nodeIdx = firstIdx + p;
-        auto &row = rowPool[p];
+    constexpr size_t unusedRow = std::numeric_limits<size_t>::max();
+    const size_t visibleCount = std::min(POOL_SIZE, ids.size() - firstIdx);
+    std::array<size_t, POOL_SIZE> assignedRows{};
+    std::array<bool, POOL_SIZE> usedRows{};
+    assignedRows.fill(unusedRow);
 
-        if (nodeIdx < ids.size()) {
-            const NodeId id = ids[nodeIdx];
-            const auto *rec = currentStore->find(id);
-            if (rec) {
-                bindRow(row, *rec, id == expandedId);
-                lv_obj_set_y(row.panel, prefixHeights[nodeIdx]);
-                lv_obj_remove_flag(row.panel, LV_OBJ_FLAG_HIDDEN);
-            } else {
-                lv_obj_add_flag(row.panel, LV_OBJ_FLAG_HIDDEN);
-                row.boundId = 0;
+    for (size_t slot = 0; slot < visibleCount; ++slot) {
+        const NodeId id = ids[firstIdx + slot];
+        for (size_t rowIndex = 0; rowIndex < rowPool.size(); ++rowIndex) {
+            if (!usedRows[rowIndex] && rowPool[rowIndex].boundId == id) {
+                assignedRows[slot] = rowIndex;
+                usedRows[rowIndex] = true;
+                break;
             }
-        } else {
-            lv_obj_add_flag(row.panel, LV_OBJ_FLAG_HIDDEN);
-            row.boundId = 0;
         }
     }
+
+    for (size_t slot = 0; slot < visibleCount; ++slot) {
+        if (assignedRows[slot] != unusedRow) {
+            continue;
+        }
+        for (size_t rowIndex = 0; rowIndex < rowPool.size(); ++rowIndex) {
+            if (!usedRows[rowIndex]) {
+                assignedRows[slot] = rowIndex;
+                usedRows[rowIndex] = true;
+                break;
+            }
+        }
+    }
+
+    for (size_t slot = 0; slot < visibleCount; ++slot) {
+        const size_t rowIndex = assignedRows[slot];
+        if (rowIndex == unusedRow) {
+            continue;
+        }
+        const size_t nodeIdx = firstIdx + slot;
+        const NodeId id = ids[nodeIdx];
+        auto &row = rowPool[rowIndex];
+        const auto *rec = currentStore->find(id);
+        if (rec) {
+            if (rebind || row.boundId != id) {
+                bindRow(row, *rec, rowShowsExpandedDetails(id));
+            }
+            const int32_t height = rowHeight(id);
+            const int32_t y = rowY(nodeIdx);
+            if (row.renderedHeight != height) {
+                lv_obj_set_height(row.panel, height);
+                row.renderedHeight = height;
+            }
+            if (row.renderedY != y) {
+                lv_obj_set_y(row.panel, y);
+                row.renderedY = y;
+            }
+            lv_obj_remove_flag(row.panel, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(row.panel, LV_OBJ_FLAG_HIDDEN);
+            if (attachedGroup && row.btn && lv_obj_get_group(row.btn) == attachedGroup) {
+                lv_group_remove_obj(row.btn);
+            }
+            clearRowBinding(row);
+        }
+    }
+
+    for (size_t rowIndex = 0; rowIndex < rowPool.size(); ++rowIndex) {
+        if (usedRows[rowIndex]) {
+            continue;
+        }
+        auto &row = rowPool[rowIndex];
+        lv_obj_add_flag(row.panel, LV_OBJ_FLAG_HIDDEN);
+        if (attachedGroup && row.btn && lv_obj_get_group(row.btn) == attachedGroup) {
+            lv_group_remove_obj(row.btn);
+        }
+        clearRowBinding(row);
+    }
+
+    const bool canRotateOneRow =
+        !force && !rebind && visibleCount == POOL_SIZE && previousFirstRenderedIndex != std::numeric_limits<size_t>::max();
+    const bool forwardOneRow = canRotateOneRow && firstIdx == previousFirstRenderedIndex + 1;
+    const bool backwardOneRow = canRotateOneRow && firstIdx + 1 == previousFirstRenderedIndex;
+
+    if (forwardOneRow) {
+        const size_t rowIndex = assignedRows[visibleCount - 1];
+        lv_obj_move_to_index(rowPool[rowIndex].panel, static_cast<int32_t>(visibleCount));
+#ifdef UNIT_TEST
+        ++panelOrderMoveCount;
+#endif
+        moveGroupButtonToTail(attachedGroup, rowPool[rowIndex].btn);
+#ifdef UNIT_TEST
+        ++groupOrderMoveCount;
+#endif
+    } else if (backwardOneRow) {
+        const size_t rowIndex = assignedRows[0];
+        lv_obj_move_to_index(rowPool[rowIndex].panel, 1);
+#ifdef UNIT_TEST
+        ++panelOrderMoveCount;
+#endif
+        moveGroupButtonToHead(attachedGroup, rowPool[rowIndex].btn);
+#ifdef UNIT_TEST
+        ++groupOrderMoveCount;
+#endif
+    } else {
+        if (spacer) {
+            lv_obj_move_to_index(spacer, 0);
+#ifdef UNIT_TEST
+            ++panelOrderMoveCount;
+#endif
+        }
+        for (size_t slot = 0; slot < visibleCount; ++slot) {
+            const size_t rowIndex = assignedRows[slot];
+            if (rowIndex != unusedRow && rowPool[rowIndex].panel) {
+                lv_obj_move_to_index(rowPool[rowIndex].panel, static_cast<int32_t>(slot + 1));
+#ifdef UNIT_TEST
+                ++panelOrderMoveCount;
+#endif
+            }
+        }
+        for (size_t slot = visibleCount; slot > 0; --slot) {
+            const size_t rowIndex = assignedRows[slot - 1];
+            if (rowIndex != unusedRow && rowPool[rowIndex].btn) {
+                moveGroupButtonToHead(attachedGroup, rowPool[rowIndex].btn);
+#ifdef UNIT_TEST
+                ++groupOrderMoveCount;
+#endif
+            }
+        }
+    }
+#ifdef UNIT_TEST
+    lv_obj_update_layout(parentPanel);
+#endif
+}
+
+bool VirtualNodeList::refreshNode(NodeId id, uint32_t now, const NodeListRenderContext &context)
+{
+    if (!id || !currentStore) {
+        return false;
+    }
+
+    currentTime = now != 0 ? now : static_cast<uint32_t>(std::time(nullptr));
+    renderContext = context;
+
+    const auto *rec = currentStore->find(id);
+    if (!rec) {
+        return false;
+    }
+
+    for (size_t index = 0; index < rowPool.size(); ++index) {
+        auto &row = rowPool[index];
+        if (row.boundId == id && row.panel && !lv_obj_has_flag(row.panel, LV_OBJ_FLAG_HIDDEN)) {
+            bindRow(row, *rec, rowShowsExpandedDetails(id));
+            const int32_t height = rowHeight(id);
+            const auto position = currentIndex ? currentIndex->indexOf(id) : std::nullopt;
+            const int32_t y = position.has_value() ? rowY(position.value()) : lv_obj_get_y(row.panel);
+            if (row.renderedHeight != height) {
+                lv_obj_set_height(row.panel, height);
+                row.renderedHeight = height;
+            }
+            if (row.renderedY != y) {
+                lv_obj_set_y(row.panel, y);
+                row.renderedY = y;
+            }
+            return true;
+        }
+    }
+
+    return false;
 }
 
 void VirtualNodeList::scrollEventCallback(lv_event_t *e)
@@ -678,19 +1136,40 @@ void VirtualNodeList::rowClickCallback(lv_event_t *e)
         return;
     }
 
-    const auto id = static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(btn)));
-    if (id == 0) {
+    ReusableRow *row = nullptr;
+    for (auto &candidate : self->rowPool) {
+        if (candidate.btn == btn) {
+            row = &candidate;
+            break;
+        }
+    }
+    if (!row) {
         return;
     }
 
     const lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_CLICKED) {
-        self->actionSink.nodeClicked(id);
+    if (code == LV_EVENT_PRESSED) {
+        row->pressedId = row->boundId;
+    } else if (code == LV_EVENT_PRESS_LOST || code == LV_EVENT_CANCEL) {
+        row->pressedId = 0;
+    } else if (code == LV_EVENT_CLICKED) {
+        const NodeId id = row->pressedId ? row->pressedId : row->boundId;
+        row->pressedId = 0;
+        if (id != 0 && !self->expansionAnimating()) {
+            self->actionSink.nodeClicked(id);
+        }
     } else if (code == LV_EVENT_LONG_PRESSED) {
-        self->actionSink.nodeLongPressed(id);
+        const NodeId id = row->pressedId ? row->pressedId : row->boundId;
+        row->pressedId = 0;
+        if (id != 0) {
+            self->actionSink.nodeLongPressed(id);
+        }
     } else if (code == LV_EVENT_FOCUSED) {
-        self->noteFocusedButton(btn);
-        self->actionSink.nodeFocused(id);
+        const NodeId id = row->boundId;
+        if (id != 0) {
+            self->noteFocusedButton(btn);
+            self->actionSink.nodeFocused(id);
+        }
     }
 }
 
@@ -713,5 +1192,21 @@ void VirtualNodeList::groupEdgeCallback(lv_group_t *group, bool forward)
     (void)group;
     if (activeGroupNavigationList) {
         activeGroupNavigationList->handleGroupEdge(forward);
+    }
+}
+
+void VirtualNodeList::expansionAnimationCallback(void *var, int32_t progress)
+{
+    auto *self = static_cast<VirtualNodeList *>(var);
+    if (self) {
+        self->updateExpansionAnimation(progress);
+    }
+}
+
+void VirtualNodeList::expansionAnimationFinished(lv_anim_t *animation)
+{
+    auto *self = static_cast<VirtualNodeList *>(animation->var);
+    if (self) {
+        self->finishExpansionAnimation();
     }
 }

@@ -62,6 +62,9 @@ struct MuiRowSnapshot {
     int32_t shortNameX = 0;
     int32_t signalX = 0;
     int32_t signalY = 0;
+    int32_t rowWidth = 0;
+    int32_t signalWidth = 0;
+    int32_t signalLongMode = 0;
 };
 
 class MuiTestHarness
@@ -160,6 +163,9 @@ class MuiTestHarness
     void focusPreviousInGroup();
     void focusNextInVirtualGroup();
     void focusPreviousInVirtualGroup();
+    void dispatchKeyboardKey(uint32_t key, bool longPress = false);
+    void dispatchEncoderDelta(int16_t diff);
+    void dispatchEncoderKey(uint32_t key, bool longPress = false);
     lv_group_t *virtualNavigationGroup() const;
     lv_group_t *keyboardInputGroup() const;
     lv_group_t *encoderInputGroup() const;
@@ -170,6 +176,7 @@ class MuiTestHarness
     MuiRowSnapshot legacyRowSnapshot(uint32_t nodeId) const;
     lv_obj_t *legacyNodeListRootForTesting() const;
     lv_obj_t *nodeListRootForTesting() const;
+    TFTView_320x240 *viewForTesting() const { return view; }
     void showNodesScreen();
     HeadlessDisplayDriver *displayDriverForTesting() const;
 

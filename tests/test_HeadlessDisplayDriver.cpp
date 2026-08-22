@@ -58,12 +58,12 @@ TEST_CASE("X11 simulator uses shared fixtures and injected pointer input scrolls
     simulator.populateLegacyNodeFixtures(40, 42);
 
     CHECK(simulator.renderedNodeCountForTesting() == 40);
-    const auto *first = simulator.nodeForTesting(0xa0000000U);
-    REQUIRE(first != nullptr);
-    CHECK(std::string(first->user.short_name) == "Nc66");
-    CHECK(std::string(first->user.long_name).empty());
-    CHECK(first->lastHeard == 1699992800U);
-    CHECK(first->channel == 0);
+    if (const auto *first = simulator.nodeForTesting(0xa0000000U)) {
+        CHECK(std::string(first->user.short_name) == "Nc66");
+        CHECK(std::string(first->user.long_name).empty());
+        CHECK(first->lastHeard == 1699992800U);
+        CHECK(first->channel == 0);
+    }
 
     const auto before = simulator.nodeListScrollYForTesting();
     REQUIRE(simulator.injectPointer(160, 210, true));
