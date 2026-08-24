@@ -75,3 +75,23 @@ jobs:
       - name: Run Unit Tests
         run: |
           ctest --test-dir build
+
+      - name: Configure Linux Node List Benchmark
+        run: |
+          cmake -S . -B build-node-list-bench -G Ninja \
+            -DENABLE_MUI_HEADLESS_TESTS=ON \
+            -DENABLE_DOCTESTS=ON \
+            -DENABLE_MUI_VIRTUAL_NODE_LIST=ON
+
+      - name: Build Linux Node List Benchmark
+        run: |
+          cmake --build build-node-list-bench --target node_list_bench
+
+      - name: Smoke Test Linux Node List Benchmark
+        run: |
+          build-node-list-bench/bin/node_list_bench \
+            --nodes 25 \
+            --trials 1 \
+            --seed 42 \
+            --implementation virtual_candidate \
+            --json build-node-list-bench/node-list-bench-linux-smoke.json

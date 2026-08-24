@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <new>
 #include <string>
 
 #ifdef DEVICE_UI_HEADLESS_TEST
@@ -249,6 +250,11 @@ rapidjson::Document task7BenchmarkJson(NodeListBenchmarkImplementation implement
     CHECK_FALSE(removeError);
     return document;
 }
+
+void *nullBenchmarkMalloc(size_t)
+{
+    return nullptr;
+}
 } // namespace
 
 TEST_CASE("baseline benchmark emits list diagnostics")
@@ -332,6 +338,17 @@ TEST_CASE("benchmark CLI selects the virtual candidate explicitly")
     REQUIRE(parseNodeListBenchmarkCommandLine(11, arguments, options, jsonPath));
     CHECK(options.implementation == NodeListBenchmarkImplementation::VirtualCandidate);
     CHECK(jsonPath == "/tmp/node-list-virtual-candidate.json");
+}
+
+TEST_CASE("benchmark RSS helper preserves byte-valued ru_maxrss and expands kilobyte-valued ru_maxrss")
+{
+    CHECK(nodeListBenchmarkRssBytesForTesting(4096, NodeListBenchmarkRssUnit::Bytes) == 4096);
+    CHECK(nodeListBenchmarkRssBytesForTesting(4096, NodeListBenchmarkRssUnit::Kilobytes) == 4096U * 1024U);
+}
+
+TEST_CASE("benchmark replacement operator new throws bad_alloc when malloc fails")
+{
+    CHECK_THROWS_AS(nodeListBenchmarkAllocateForNewForTesting(8, nullBenchmarkMalloc), std::bad_alloc);
 }
 
 TEST_CASE("virtual candidate benchmark reports allocator churn from real LVGL node-list syncs")

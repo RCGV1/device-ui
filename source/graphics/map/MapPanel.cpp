@@ -5,7 +5,7 @@
 #include "util/ILog.h"
 #include <assert.h>
 
-#define HASH(X, Y) (((X) << 16) | ((Y)&0xFFFF))
+#define HASH(X, Y) (((X) << 16) | ((Y) & 0xFFFF))
 
 MapPanel::MapPanel(lv_obj_t *p, ITileService *s)
     : widthPixel(320), heightPixel(240),
@@ -500,6 +500,9 @@ void MapPanel::update(uint32_t id, float lat, float lon)
 
 void MapPanel::update(uint32_t id, bool filtered)
 {
+#ifdef UNIT_TEST
+    ++filterUpdateCount;
+#endif
     auto it = mapObjects.find(id);
     if (it != mapObjects.end() && it->second->point.isFiltered != filtered) {
         // only update if filter state changed
@@ -507,6 +510,14 @@ void MapPanel::update(uint32_t id, bool filtered)
         drawObject(*it->second);
     }
 }
+
+#ifdef UNIT_TEST
+bool MapPanel::objectFilteredForTesting(uint32_t id) const
+{
+    const auto it = mapObjects.find(id);
+    return it != mapObjects.end() && it->second->point.isFiltered;
+}
+#endif
 
 void MapPanel::remove(uint32_t id)
 {

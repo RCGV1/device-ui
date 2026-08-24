@@ -1,5 +1,6 @@
 #include "doctest.h"
 #include "graphics/common/MeshtasticView.h"
+#include "graphics/common/NodeListRowPresentation.h"
 #include "graphics/view/TFT/VirtualNodeList.h"
 #include "images.h"
 #include "tests/MuiTestHarness.h"
@@ -65,41 +66,14 @@ lv_obj_t *virtualSpacer(lv_obj_t *parent)
     return nullptr;
 }
 
+// Row accent colors as read back through lv_color_to_u32.
+constexpr uint32_t kMissingKeyImageBorderRed = 0xffff5555U;
+constexpr uint32_t kUnmessagableImageRecolorRed = 0xffff5555U;
+constexpr uint32_t kHighlightMeshRowBorder = 0xff67ea94U;
+
 MuiRowSnapshot snapshotVirtualRow(lv_obj_t *row)
 {
-    lv_obj_t *image = lv_obj_get_child(row, 0);
-    lv_obj_t *longName = lv_obj_get_child(row, 2);
-    lv_obj_t *shortName = lv_obj_get_child(row, 3);
-    lv_obj_t *signal = lv_obj_get_child(row, 6);
-    return {
-        labelText(row, 2),
-        labelText(row, 3),
-        labelText(row, 4),
-        labelText(row, 5),
-        labelText(row, 6),
-        labelText(row, 7),
-        labelText(row, 8),
-        labelText(row, 9),
-        labelText(row, 10),
-        lv_obj_get_y_aligned(shortName),
-        lv_color_to_u32(lv_obj_get_style_bg_color(image, LV_PART_MAIN)),
-        lv_color_to_u32(lv_obj_get_style_border_color(image, LV_PART_MAIN)),
-        lv_color_to_u32(lv_obj_get_style_image_recolor(image, LV_PART_MAIN)),
-        lv_obj_get_style_image_recolor_opa(image, LV_PART_MAIN),
-        reinterpret_cast<uintptr_t>(lv_image_get_src(image)),
-        lv_color_to_u32(lv_obj_get_style_bg_color(row, LV_PART_MAIN)),
-        lv_color_to_u32(lv_obj_get_style_border_color(row, LV_PART_MAIN)),
-        lv_obj_get_x(image),
-        lv_obj_get_y(image),
-        lv_obj_get_x(longName),
-        lv_obj_get_y(longName),
-        lv_obj_get_x(shortName),
-        lv_obj_get_x(signal),
-        lv_obj_get_y(signal),
-        lv_obj_get_width(row),
-        lv_obj_get_width(signal),
-        static_cast<int32_t>(lv_label_get_long_mode(signal)),
-    };
+    return snapshotMuiRow(row);
 }
 
 NodeId visibleLegacyNodeAt(MuiTestHarness &harness, size_t visibleIndex)
@@ -252,7 +226,7 @@ TEST_CASE("VirtualNodeList row pool remains strictly bounded")
     CHECK(objectsAt100 == objectsAt25);
 }
 
-TEST_CASE("VirtualNodeList collapsed rows retain the legacy label geometry")
+TEST_CASE("VirtualNodeList collapsed rows keep the retained-row label geometry")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
@@ -323,7 +297,40 @@ TEST_CASE("VirtualNodeList renders last-heard ages against the supplied current 
     CHECK(std::string(lv_label_get_text(lv_obj_get_child(row, 5))) == "2 min");
 }
 
-TEST_CASE("VirtualNodeList renders expanded legacy detail labels without adding row objects")
+TEST_CASE("VirtualNodeList refreshes last-heard labels at node-relative minute boundaries")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    lv_obj_t *parent = harness.nodeListRootForTesting();
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    meshtastic_User user{};
+    std::strcpy(user.short_name, "NODE");
+    std::strcpy(user.long_name, "Boundary Node");
+    store.upsertUser(0x12345678, 0, 100U, user, false);
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+
+    list.sync(store, index, 0, 159U);
+    harness.pump();
+    lv_obj_t *row = boundRow(parent, 0x12345678);
+    REQUIRE(row != nullptr);
+    REQUIRE(labelText(row, 5) == "now");
+    const uint32_t bindsBeforeBoundary = list.bindGenerationForTesting();
+
+    list.sync(store, index, 0, 160U);
+    harness.pump();
+
+    CHECK(list.bindGenerationForTesting() > bindsBeforeBoundary);
+    CHECK(labelText(row, 5) == "1 min");
+}
+
+TEST_CASE("VirtualNodeList renders expanded panel-backed detail labels without adding row objects")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
@@ -383,7 +390,7 @@ TEST_CASE("VirtualNodeList renders expanded legacy detail labels without adding 
     CHECK_FALSE(childHidden(row, 10));
 }
 
-TEST_CASE("VirtualNodeList matches legacy battery clamp and imperial position/weather formatting")
+TEST_CASE("VirtualNodeList matches the retained-row battery clamp and imperial position/weather formatting")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
@@ -434,7 +441,7 @@ TEST_CASE("VirtualNodeList matches legacy battery clamp and imperial position/we
     CHECK(labelText(row, 4) == "100% 4.12V");
 }
 
-TEST_CASE("VirtualNodeList renders legacy role and unmessagable icons from the record")
+TEST_CASE("VirtualNodeList renders retained role and unmessagable icons from the record")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
@@ -477,7 +484,63 @@ TEST_CASE("VirtualNodeList renders legacy role and unmessagable icons from the r
     CHECK(lv_image_get_src(lv_obj_get_child(blockedRow, 0)) == &img_unmessagable_image);
 }
 
-TEST_CASE("VirtualNodeList matches legacy event-driven row text and distance presentation")
+TEST_CASE("VirtualNodeList matches retained collapsed-row extended detail visibility and fonts")
+{
+    MuiTestHarness legacy;
+    legacy.resetNodeList();
+    legacy.enableVirtualNodeModelFixture();
+    legacy.setCurrentTime(1700000000U);
+
+    constexpr NodeId ownNode = 0xaaaa0001;
+    constexpr NodeId remoteNode = 0x12345678;
+    legacy.setOwnNodeFixture(ownNode);
+    legacy.addNodeFixture(ownNode, "SELF", "Own Node", 1699999900U, MeshtasticView::client, true, false, 0);
+    legacy.updatePositionFixture(ownNode, 377749000, -1224194000, 50, 9, 13);
+
+    legacy.addNodeFixture(remoteNode, "ABCD", "Remote Weather", 1699999880U, MeshtasticView::router, false, false, 2);
+    legacy.updatePositionFixture(remoteNode, 377750000, -1224190000, 44, 7, 12);
+    legacy.updateTelemetryFixture(remoteNode, 22.5f, 45.0f, 1013.25f, 42);
+    legacy.updateHopsFixture(remoteNode, 3);
+    legacy.pump();
+
+    // Collapsed rows: extended detail labels stay populated and visible once
+    // data arrives (the 53 px row panel clips them to a sliver), and both
+    // renderers use montserrat_14.
+    const MuiRowSnapshot legacyRow = legacy.legacyRowSnapshot(remoteNode);
+    const MuiRowSnapshot virtualRow = syncVirtualSnapshotFromLegacy(legacy, remoteNode, 0, ownNode);
+
+    CHECK(virtualRow.position1 == legacyRow.position1);
+    CHECK(virtualRow.position2 == legacyRow.position2);
+    CHECK(virtualRow.telemetry1 == legacyRow.telemetry1);
+    CHECK(virtualRow.telemetry2 == legacyRow.telemetry2);
+    CHECK(virtualRow.position1Hidden == legacyRow.position1Hidden);
+    CHECK(virtualRow.position2Hidden == legacyRow.position2Hidden);
+    CHECK(virtualRow.telemetry1Hidden == legacyRow.telemetry1Hidden);
+    CHECK(virtualRow.telemetry2Hidden == legacyRow.telemetry2Hidden);
+    CHECK(virtualRow.shortNameFont == legacyRow.shortNameFont);
+    CHECK(virtualRow.shortNameFont == reinterpret_cast<uintptr_t>(&ui_font_montserrat_14));
+}
+
+TEST_CASE("VirtualNodeList paints the missing-key border red exactly like the panel-backed list")
+{
+    MuiTestHarness legacy;
+    legacy.resetNodeList();
+    legacy.enableVirtualNodeModelFixture();
+    legacy.setCurrentTime(1700000000U);
+
+    constexpr NodeId keylessRouter = 0x12345678;
+    legacy.addNodeFixture(keylessRouter, "NOKE", "Keyless Router", 1699999900U, MeshtasticView::router, false, false, 1);
+    legacy.pump();
+
+    const MuiRowSnapshot legacyRow = legacy.legacyRowSnapshot(keylessRouter);
+    const MuiRowSnapshot virtualRow = syncVirtualSnapshotFromLegacy(legacy, keylessRouter);
+
+    REQUIRE(!legacyRow.longName.empty());
+    CHECK(virtualRow.imageBorder == kMissingKeyImageBorderRed);
+    CHECK(legacyRow.imageBorder == kMissingKeyImageBorderRed);
+}
+
+TEST_CASE("VirtualNodeList matches retained-row event-driven text and distance presentation")
 {
     MuiTestHarness legacy;
     legacy.resetNodeList();
@@ -513,7 +576,7 @@ TEST_CASE("VirtualNodeList matches legacy event-driven row text and distance pre
     CHECK(virtualRow.telemetry2 == legacyRow.telemetry2);
 }
 
-TEST_CASE("VirtualNodeList matches the same legacy row visual contract at the same viewport position")
+TEST_CASE("VirtualNodeList matches the same retained-row visual contract at the same viewport position")
 {
     MuiTestHarness legacy;
     legacy.resetNodeList();
@@ -581,7 +644,7 @@ TEST_CASE("VirtualNodeList matches the same legacy row visual contract at the sa
     CHECK(virtualRow.signalLongMode == legacyRow.signalLongMode);
 }
 
-TEST_CASE("VirtualNodeList matches legacy signal label event order")
+TEST_CASE("VirtualNodeList matches the retained signal label event order")
 {
     {
         MuiTestHarness signalThenHops;
@@ -611,7 +674,7 @@ TEST_CASE("VirtualNodeList matches legacy signal label event order")
     }
 }
 
-TEST_CASE("VirtualNodeList matches legacy icon style and short-name fallback after node events")
+TEST_CASE("VirtualNodeList matches retained-row icon style and short-name fallback after node events")
 {
     MuiTestHarness legacy;
     legacy.resetNodeList();
@@ -676,6 +739,32 @@ TEST_CASE("VirtualNodeList matches legacy icon style and short-name fallback aft
           legacy.legacyRowSnapshot(nonPrintableShort).shortName);
 }
 
+TEST_CASE("VirtualNodeList short-name distance formatting clears stale pooled bytes")
+{
+    char shortText[32];
+    std::memset(shortText, 'X', sizeof(shortText));
+    shortText[sizeof(shortText) - 1] = '\0';
+
+    NodeListRowPresentation::formatShortNameWithDistance(shortText, sizeof(shortText), "AB", 0x12345678, true, 377749000,
+                                                         -1224194000, 377749500, -1224194000, true);
+
+    CHECK(std::string(shortText).substr(0, 5) == "AB  \n");
+}
+
+TEST_CASE("VirtualNodeList short-name formatting clears stale pooled bytes without a distance line")
+{
+    char shortText[32];
+    std::memset(shortText, 'X', sizeof(shortText));
+    shortText[sizeof(shortText) - 1] = '\0';
+
+    NodeListRowPresentation::formatShortDisplayName(shortText, sizeof(shortText), "AB", 0x12345678);
+
+    CHECK(shortText[0] == 'A');
+    CHECK(shortText[1] == 'B');
+    CHECK(shortText[2] == '\0');
+    CHECK(shortText[3] == '\0');
+}
+
 TEST_CASE("VirtualNodeList resets pooled image recolor when a row is rebound after unmessagable")
 {
     MuiTestHarness legacy;
@@ -709,7 +798,7 @@ TEST_CASE("VirtualNodeList resets pooled image recolor when a row is rebound aft
         constexpr NodeId blockedFirst = 0x5555a001;
         legacy.addNodeFixture(blockedFirst, "BLK1", "Blocked Prime", 1699999900U, MeshtasticView::client, true, true, 0);
         pooledRow = syncCurrentLegacy(blockedFirst);
-        CHECK(snapshotVirtualRow(pooledRow).imageRecolor == 0xffff5555U);
+        CHECK(snapshotVirtualRow(pooledRow).imageRecolor == kUnmessagableImageRecolorRed);
 
         constexpr NodeId darkNormal = 0x00000001;
         legacy.resetNodeList();
@@ -726,7 +815,7 @@ TEST_CASE("VirtualNodeList resets pooled image recolor when a row is rebound aft
         legacy.addNodeFixture(blockedSecond, "BLK2", "Blocked Prime Again", 1699999900U, MeshtasticView::client, true, true, 0);
         lv_obj_t *blockedRow = syncCurrentLegacy(blockedSecond);
         CHECK(blockedRow == pooledRow);
-        CHECK(snapshotVirtualRow(blockedRow).imageRecolor == 0xffff5555U);
+        CHECK(snapshotVirtualRow(blockedRow).imageRecolor == kUnmessagableImageRecolorRed);
 
         constexpr NodeId brightRouter = 0x00fefefe;
         legacy.resetNodeList();
@@ -1418,7 +1507,7 @@ TEST_CASE("VirtualNodeList rebinds visible highlights when only render context c
     list.sync(store, index, 0, 1700000000U, context);
 
     CHECK(list.bindGenerationForTesting() > bindsBefore);
-    CHECK(lv_color_to_u32(lv_obj_get_style_border_color(row, LV_PART_MAIN)) == 0xff67ea94U);
+    CHECK(lv_color_to_u32(lv_obj_get_style_border_color(row, LV_PART_MAIN)) == kHighlightMeshRowBorder);
 }
 
 TEST_CASE("VirtualNodeList unit-test finish removes the live LVGL expansion animation")

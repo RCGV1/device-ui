@@ -63,15 +63,12 @@ TEST_CASE("visible index applies current filters and newest-first ordering")
     SUBCASE("no filter: sorted newest first, then NodeId ascending")
     {
         index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
-        // Order expected:
-        // 0x1111 (1000) & 0x9999 (1000) -> 0x1111, 0x9999
-        // 0x4444 (800)
-        // 0x2222 (500)
-        // 0x3333 (0)
+        // Order expected: own node 0x9999 pinned first, then
+        // 0x1111 (1000), 0x4444 (800), 0x2222 (500), 0x3333 (0)
         const auto &ids = index.ids();
         REQUIRE(ids.size() == 5);
-        CHECK(ids[0] == 0x1111);
-        CHECK(ids[1] == 0x9999);
+        CHECK(ids[0] == 0x9999);
+        CHECK(ids[1] == 0x1111);
         CHECK(ids[2] == 0x4444);
         CHECK(ids[3] == 0x2222);
         CHECK(ids[4] == 0x3333);
@@ -81,21 +78,21 @@ TEST_CASE("visible index applies current filters and newest-first ordering")
     {
         filter.unknown = true;
         index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
-        CHECK(index.ids() == std::vector<NodeId>{0x1111, 0x9999, 0x4444, 0x3333});
+        CHECK(index.ids() == std::vector<NodeId>{0x9999, 0x1111, 0x4444, 0x3333});
     }
 
     SUBCASE("filter offline: excludes 0x2222 (500 < 700) and 0x3333 (0)")
     {
         filter.offline = true;
         index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
-        CHECK(index.ids() == std::vector<NodeId>{0x1111, 0x9999, 0x4444});
+        CHECK(index.ids() == std::vector<NodeId>{0x9999, 0x1111, 0x4444});
     }
 
     SUBCASE("filter public key: excludes 0x2222 (hasKey=false)")
     {
         filter.publicKey = true;
         index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
-        CHECK(index.ids() == std::vector<NodeId>{0x1111, 0x9999, 0x4444, 0x3333});
+        CHECK(index.ids() == std::vector<NodeId>{0x9999, 0x1111, 0x4444, 0x3333});
     }
 
     SUBCASE("filter channel: channel 1 (dropdown selected=2 -> channel=1) selects only 0x2222 plus ownNode")
@@ -109,7 +106,7 @@ TEST_CASE("visible index applies current filters and newest-first ordering")
     {
         filter.position = true;
         index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
-        CHECK(index.ids() == std::vector<NodeId>{0x1111, 0x9999});
+        CHECK(index.ids() == std::vector<NodeId>{0x9999, 0x1111});
     }
 
     SUBCASE("filter mqtt: remains disabled for legacy-compatible parity")
@@ -117,7 +114,7 @@ TEST_CASE("visible index applies current filters and newest-first ordering")
         store.upsertUser(0x5555, 0, 950, makeUser("!00005555", "MQTT Node", "MQTT"), true);
         filter.viaMqtt = true;
         index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
-        CHECK(index.ids() == std::vector<NodeId>{0x1111, 0x9999, 0x5555, 0x4444, 0x2222, 0x3333});
+        CHECK(index.ids() == std::vector<NodeId>{0x9999, 0x1111, 0x5555, 0x4444, 0x2222, 0x3333});
     }
 
     SUBCASE("filter hops: hops <= 0 (dropdown 7) selects direct nodes (0x1111)")
@@ -142,7 +139,7 @@ TEST_CASE("visible index applies current filters and newest-first ordering")
     {
         filter.name = "alp";
         index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
-        CHECK(index.ids() == std::vector<NodeId>{0x1111, 0x9999}); // 0x1111 matches, ownNode always kept
+        CHECK(index.ids() == std::vector<NodeId>{0x9999, 0x1111}); // 0x1111 matches, ownNode always kept
     }
 
     SUBCASE("filter name: search matching hex node ID of unknown node '2222'")
@@ -168,6 +165,13 @@ TEST_CASE("visible index applies current filters and newest-first ordering")
         filter.name = "305441741";
         index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
         CHECK_FALSE(index.contains(0x1234abcd));
+    }
+
+    SUBCASE("filter name negation: bare '!' hides every non-own node")
+    {
+        filter.name = "!";
+        index.rebuild(store, filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
+        CHECK(index.ids() == std::vector<NodeId>{ownNode});
     }
 
     SUBCASE("filter name negation: '!' excludes matches")
@@ -205,6 +209,56 @@ TEST_CASE("visible index preserves stable selection lookup after last-heard reor
     CHECK(index.indexOf(0x9999) == std::nullopt);
 }
 
+TEST_CASE("visible index membership detection stays linear during a recency-only reorder")
+{
+    NodeStore store;
+    constexpr size_t nodeCount = 128;
+    for (size_t i = 0; i < nodeCount; ++i) {
+        const NodeId id = static_cast<NodeId>(0x1000 + i);
+        store.upsertUser(id, 0, static_cast<uint32_t>(nodeCount - i), makeUser("!00001000", "Node", "NODE"), false);
+    }
+
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    const uint32_t membershipGeneration = index.membershipGeneration();
+
+    store.updateLastHeard(0x107f, 1000);
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+
+    CHECK(index.ids().front() == 0x107f);
+    CHECK(index.membershipGeneration() == membershipGeneration);
+    CHECK(index.membershipProbeCountForTesting() == nodeCount);
+}
+
+TEST_CASE("visible index membership cache keeps fixed storage at the 250-node limit")
+{
+    NodeStore store;
+    constexpr size_t nodeCount = 250;
+    for (size_t i = 0; i < nodeCount; ++i) {
+        const NodeId id = static_cast<NodeId>(0x1000 + i);
+        store.upsertUser(id, 0, static_cast<uint32_t>(nodeCount - i), makeUser("!00001000", "Node", "NODE"), false);
+    }
+
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    const auto *storage = index.membershipStorageForTesting();
+
+    REQUIRE(index.membershipStorageCapacityForTesting() == nodeCount);
+    REQUIRE(index.membershipStorageSizeForTesting() == nodeCount);
+
+    store.remove(0x10f9);
+    store.upsertUser(0x2000, 0, 1, makeUser("!00002000", "Replacement", "REPL"), false);
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+
+    CHECK(index.membershipStorageForTesting() == storage);
+    CHECK(index.membershipStorageCapacityForTesting() == nodeCount);
+    CHECK(index.membershipStorageSizeForTesting() == nodeCount);
+    CHECK(index.contains(0x2000));
+    CHECK_FALSE(index.contains(0x10f9));
+}
+
 TEST_CASE("visible index promotes same-second last-heard refreshes ahead of older ties")
 {
     NodeStore store;
@@ -239,4 +293,64 @@ TEST_CASE("visible index clamps future last-heard timestamps before ordering")
     REQUIRE(index.ids().size() == 2);
     CHECK(index.ids()[0] == 0x9000);
     CHECK(index.ids()[1] == 0x1000);
+}
+
+TEST_CASE("visible index keeps reusable scratch capacity after changed rebuilds")
+{
+    NodeStore store;
+    store.upsertUser(0x1111, 0, 300, makeUser("!00001111", "Alpha", "A"), false);
+    store.upsertUser(0x2222, 0, 200, makeUser("!00002222", "Bravo", "B"), false);
+    store.upsertUser(0x3333, 0, 100, makeUser("!00003333", "Charlie", "C"), false);
+
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    const size_t reusableCapacity = index.ids().capacity();
+    REQUIRE(reusableCapacity >= 3);
+
+    store.updateLastHeard(0x3333, 400);
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+
+    CHECK(index.ids() == std::vector<NodeId>{0x3333, 0x1111, 0x2222});
+    CHECK(index.rebuildScratchCapacityForTesting() >= reusableCapacity);
+}
+
+TEST_CASE("visible index public-key filtering tracks key validity transitions")
+{
+    NodeStore store;
+    store.upsertUser(0x1111, 0, 900, makeUser("!00001111", "Keyed Node", "KEY"), false);
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    filter.publicKey = true;
+
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    CHECK(index.contains(0x1111));
+
+    // Key loss drops membership.
+    meshtastic_User keyless{};
+    std::strcpy(keyless.short_name, "KEY");
+    std::strcpy(keyless.long_name, "Keyed Node");
+    store.upsertUser(0x1111, 0, 900, keyless, false);
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    CHECK_FALSE(index.contains(0x1111));
+
+    // Bad-key marking also drops membership while the record still has a key.
+    store.upsertUser(0x1111, 0, 900, makeUser("!00001111", "Keyed Node", "KEY"), false);
+    store.markBadKey(0x1111);
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    CHECK_FALSE(index.contains(0x1111));
+}
+
+TEST_CASE("visible index treats fully-zero coordinates as unknown position")
+{
+    NodeStore store;
+    store.upsertUser(0x2222, 0, 800, makeUser("!00002222", "Null Island", "NULL"), false);
+    store.updatePosition(0x2222, {true, 0, 0, 0, 0, 0});
+    NodeListFilter filter;
+    filter.position = true;
+    VisibleNodeIndex index;
+    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    CHECK_FALSE(index.contains(0x2222));
+    // Documented edge: a single-zero coordinate still counts as positioned at
+    // the model layer, though the panel renderer requires both axes non-zero.
 }

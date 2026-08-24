@@ -115,12 +115,14 @@ class TFTView_320x240 : public MeshtasticView
 #endif
 
 #ifdef UNIT_TEST
+    std::array<char, 4> nodeShortNameCacheForTesting(NodeId id) const;
     lv_obj_t *nodeListRootForTesting(void) const;
     lv_obj_t *legacyNodeListRootForTesting(void) const;
     void showNodesScreenForTesting(void);
     void resetNodeListForTesting(void);
     void updateNodesFilteredForTesting(bool reset);
     void updateLastHeardForTesting(uint32_t nodeNum);
+    void updateAllLastHeardForTesting(void) { updateAllLastHeard(); }
     void setCurrentTimeForTesting(time_t value);
     size_t nodeCountForTesting(void) const;
     const char *nodeLongNameForTesting(uint32_t nodeNum) const;
@@ -152,6 +154,12 @@ class TFTView_320x240 : public MeshtasticView
     void dispatchChatNodeCallbackForTesting(NodeId id);
     void dispatchBadKeyRoutingErrorForTesting(NodeId id, uint32_t requestId);
     bool nodesPanelVisibleForTesting() const;
+    const char *homeBatteryPercentageTextForTesting() const;
+    uintptr_t homeBatteryImageSrcForTesting() const;
+    void setNodeNameFilterForTesting(const char *text);
+    void setNodeHighlightNameForTesting(const char *text);
+    const char *chatButtonLabelTextForTesting() const;
+    const char *settingsUserLabelTextForTesting() const;
     bool traceRoutePanelVisibleForTesting() const;
     void sendDirectTextForTesting(NodeId id, char *msg);
     uint8_t nodeHopLimitForTesting(NodeId id, int8_t unknownHops) const;
@@ -159,6 +167,11 @@ class TFTView_320x240 : public MeshtasticView
     uint32_t selectedNodeForTesting() const;
     bool messagesPanelVisibleForTesting() const;
     bool mapPanelVisibleForTesting() const;
+    void showMapForTesting();
+    bool mapMarkerFilteredForTesting(NodeId id) const;
+    void resetMapFilterCountersForTesting();
+    uint32_t mapFilterUpdateCountForTesting() const;
+    uint32_t visibleNodeContainsCallCountForTesting() const;
     uintptr_t topMessagesNodeImageSrcForTesting() const;
     const char *firstTraceRouteTowardsLabelForTesting() const;
     uintptr_t firstTraceRouteTowardsImageSrcForTesting() const;
@@ -330,6 +343,12 @@ class TFTView_320x240 : public MeshtasticView
     void setInputGroup(lv_group_t *group);
     void setInputButtonLabel(void);
     NodeListFilter currentNodeListFilter(void) const;
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    NodeListRenderContext nodeListRenderContext(void) const;
+    void publishMapFilter();
+    void reconcileVirtualNodeListInputGroup(bool enteringNodeScreen);
+#endif
+    bool chatTitleFromModel(uint32_t nodeNum, char *buf, size_t bufSize) const;
     void syncVisibleNodeIndex(void);
     void syncNodeListPresentation(void);
     void syncNodeListPresentation(bool forceRebind);
@@ -651,6 +670,10 @@ class TFTView_320x240 : public MeshtasticView
     lv_obj_t *virtualNodeListHost = nullptr;
     std::unique_ptr<VirtualNodeList> virtualNodeList;
     bool useVirtualNodeList = false;
+    uint32_t publishedMapFilterGeneration = 0;
+    bool mapFilterPublicationValid = false;
+    bool virtualNodeListInputVisibilityKnown = false;
+    bool virtualNodeListInputHadVisibleNodes = false;
 #endif
 #if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH)
     static constexpr size_t nodeListHardwareBenchmarkFixtureCount = 250;

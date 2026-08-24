@@ -59,6 +59,19 @@ struct ReusableRow {
     NodeId pressedId = 0;
     int32_t renderedY = std::numeric_limits<int32_t>::min();
     int32_t renderedHeight = std::numeric_limits<int32_t>::min();
+
+    // Float-heavy detail strings are reformatted only when their source values
+    // or unit mode change; recycled rows start invalidated.
+    bool detailKeysValid = false;
+    bool detailMetricUnits = true;
+    bool detailHasBattery = false;
+    bool detailHasEnvironment = false;
+    uint32_t detailBatteryLevel = 0;
+    float detailVoltage = 0;
+    int32_t detailLatitude = 0;
+    int32_t detailLongitude = 0;
+    int32_t detailAltitude = 0;
+    meshtastic_EnvironmentMetrics detailEnvironment{};
 };
 
 class VirtualNodeList
@@ -119,6 +132,7 @@ class VirtualNodeList
     void restoreScrollAnchor(const ScrollAnchor &anchor);
     void bindRow(ReusableRow &row, const NodeRecord &record, bool isExpanded);
     void applyHighlight(ReusableRow &row, const NodeRecord &record);
+    bool visibleLastHeardLabelsNeedRefresh(const NodeStore &store, uint32_t nextTime, const NodeListRenderContext &context) const;
     int32_t rowHeight(NodeId id) const;
     int32_t rowY(size_t index) const;
     size_t firstVisibleIndex(int32_t scrollY) const;
@@ -158,6 +172,11 @@ class VirtualNodeList
     size_t firstRenderedIndex = std::numeric_limits<size_t>::max();
     uint32_t lastSyncedIndexGeneration = 0;
     uint32_t bindGeneration = 0;
+    bool expansionCacheValid = false;
+    const VisibleNodeIndex *expansionCacheIndex = nullptr;
+    uint32_t expansionCacheGeneration = 0;
+    NodeId expansionCacheExpandedId = 0;
+    NodeId expansionCachePreviousId = 0;
     lv_group_t *attachedGroup = nullptr;
     NodeId lastFocusedId = 0;
     bool redirectingGroupFocus = false;

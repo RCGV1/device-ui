@@ -1,6 +1,9 @@
 #include "graphics/common/VisibleNodeIndex.h"
 
+#include "graphics/common/NodeListRowPresentation.h"
+
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <cstring>
 
@@ -49,9 +52,10 @@ bool VisibleNodeIndex::isVisible(const NodeRecord &node, const NodeListFilter &f
         }
     }
 
-    // Filter Public Key: hide if no public key
+    // Filter Public Key: hide when there is no usable key; a marked bad key
+    // no longer counts, matching the row presentation contract.
     if (filter.publicKey) {
-        if (!node.hasKey) {
+        if (!node.hasKey || node.hasBadKey) {
             return false;
         }
     }
@@ -81,7 +85,7 @@ bool VisibleNodeIndex::isVisible(const NodeRecord &node, const NodeListFilter &f
         }
     }
 
-    // Legacy MUI leaves the MQTT filter disabled.
+    // The MQTT filter stays disabled: viaMqtt never affects visibility.
     (void)filter.viaMqtt;
 
     // Filter Position: require known coordinates
@@ -91,10 +95,23 @@ bool VisibleNodeIndex::isVisible(const NodeRecord &node, const NodeListFilter &f
         }
     }
 
-    // Filter Name
+    // Filter Name: match against the rendered short-name text, including the
+    // id fallback and the distance line.
     if (!filter.name.empty()) {
         auto matchesAny = [&](const std::string &query) {
-            return containsCaseInsensitive(node.user.long_name, query) || containsCaseInsensitive(node.user.short_name, query);
+            if (containsCaseInsensitive(node.user.long_name, query)) {
+                return true;
+            }
+            char renderedShort[48];
+            if (filter.hasOwnPosition && node.position.hasCoordinates() && node.id != ownNode) {
+                NodeListRowPresentation::formatShortNameWithDistance(
+                    renderedShort, sizeof(renderedShort), node.user.short_name, node.id, filter.hasOwnPosition,
+                    filter.ownLatitude, filter.ownLongitude, node.position.latitude, node.position.longitude, filter.metricUnits);
+            } else {
+                NodeListRowPresentation::formatShortDisplayName(renderedShort, sizeof(renderedShort), node.user.short_name,
+                                                                node.id);
+            }
+            return containsCaseInsensitive(renderedShort, query);
         };
 
         if (filter.name[0] != '!') {
@@ -102,8 +119,9 @@ bool VisibleNodeIndex::isVisible(const NodeRecord &node, const NodeListFilter &f
                 return false;
             }
         } else {
-            std::string negated = filter.name.substr(1);
-            if (!negated.empty() && matchesAny(negated)) {
+            // An empty negation matches every name and therefore hides the row.
+            const std::string negated = filter.name.substr(1);
+            if (negated.empty() || matchesAny(negated)) {
                 return false;
             }
         }
@@ -114,19 +132,52 @@ bool VisibleNodeIndex::isVisible(const NodeRecord &node, const NodeListFilter &f
 
 void VisibleNodeIndex::rebuild(const NodeStore &store, const NodeListFilter &filter, NodeId ownNode, NodeListFilterPolicy policy)
 {
-    ++rebuildGeneration;
-    visibleIds.clear();
-    visibleIds.reserve(store.size());
+    std::vector<NodeId> &next = rebuildScratch;
+    next.clear();
+    next.reserve(store.size());
 
     for (const auto &pair : store.records()) {
         const auto &record = pair.second;
         if (isVisible(record, filter, ownNode, policy)) {
-            visibleIds.push_back(record.id);
+            next.push_back(record.id);
         }
     }
 
-    // Sort by effective lastHeard descending, then newest same-second mutation first.
-    std::sort(visibleIds.begin(), visibleIds.end(), [&store, now = filter.curTime](NodeId a, NodeId b) {
+#ifdef UNIT_TEST
+    membershipProbeCount = 0;
+#endif
+    assert(next.size() <= visibleMembership.size());
+    std::sort(next.begin(), next.end());
+
+    bool membershipChanged = next.size() != visibleMembershipSize;
+    if (!membershipChanged) {
+        for (size_t i = 0; i < next.size(); ++i) {
+#ifdef UNIT_TEST
+            ++membershipProbeCount;
+#endif
+            if (next[i] != visibleMembership[i]) {
+                membershipChanged = true;
+                break;
+            }
+        }
+    }
+    if (membershipChanged) {
+        std::copy(next.begin(), next.end(), visibleMembership.begin());
+        visibleMembershipSize = next.size();
+        ++visibleMembershipGeneration;
+    }
+
+    // Sort by effective lastHeard descending, then newest same-second mutation
+    // first. The own node keeps the first position regardless of freshness.
+    std::sort(next.begin(), next.end(), [&store, now = filter.curTime, ownNode](NodeId a, NodeId b) {
+        if (a != b) {
+            if (a == ownNode && ownNode != 0) {
+                return true;
+            }
+            if (b == ownNode && ownNode != 0) {
+                return false;
+            }
+        }
         const auto *recA = store.find(a);
         const auto *recB = store.find(b);
         uint32_t lhA = recA ? recA->lastHeard : 0;
@@ -150,6 +201,13 @@ void VisibleNodeIndex::rebuild(const NodeStore &store, const NodeListFilter &fil
         }
         return a < b;
     });
+
+    // Only publish (and bump the generation for) genuinely changed orders so
+    // redundant syncs can skip their refresh work downstream.
+    if (next != visibleIds) {
+        visibleIds.swap(next);
+        ++rebuildGeneration;
+    }
 }
 
 std::optional<size_t> VisibleNodeIndex::indexOf(NodeId id) const
@@ -164,5 +222,8 @@ std::optional<size_t> VisibleNodeIndex::indexOf(NodeId id) const
 
 bool VisibleNodeIndex::contains(NodeId id) const
 {
+#ifdef UNIT_TEST
+    ++containsCallCount;
+#endif
     return indexOf(id).has_value();
 }

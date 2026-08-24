@@ -128,7 +128,7 @@ NodeMutation NodeStore::upsertUnknown(NodeId id, uint8_t channel, uint32_t lastH
         record.user = fallback;
         changed |= NodeFieldUser;
     }
-    if (record.channel != channel) {
+    if (inserted && record.channel != channel) {
         record.channel = channel;
         changed |= NodeFieldChannel;
     }
@@ -139,7 +139,7 @@ NodeMutation NodeStore::upsertUnknown(NodeId id, uint8_t channel, uint32_t lastH
         record.viaMqtt = viaMqtt;
         changed |= NodeFieldFlags;
     }
-    if (record.lastHeard != lastHeard) {
+    if (inserted && record.lastHeard != lastHeard) {
         record.lastHeard = lastHeard;
         changed |= NodeFieldLastHeard;
     }

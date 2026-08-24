@@ -51,6 +51,11 @@ class MapPanel
     void update(uint32_t id, bool filtered);
     void remove(uint32_t id);
     uint32_t getObjectsOnMap(void) { return objectsOnMap; }
+#ifdef UNIT_TEST
+    bool objectFilteredForTesting(uint32_t id) const;
+    void resetFilterUpdateCountForTesting() { filterUpdateCount = 0; }
+    uint32_t filterUpdateCountForTesting() const { return filterUpdateCount; }
+#endif
     // images
     void setHomeLocationImage(lv_obj_t *img);
     void setGpsPositionImage(lv_obj_t *img);
@@ -99,6 +104,9 @@ class MapPanel
     const lv_image_dsc_t *noTileImage; // lvgl image src for displaying "no tile"
     TileService *service;              // tile service provider
     uint32_t objectsOnMap;             // num of visible objcts on map
+#ifdef UNIT_TEST
+    uint32_t filterUpdateCount = 0;
+#endif
     std::unordered_map<uint32_t, std::unique_ptr<MapTile>> tiles;
     std::unordered_map<uintptr_t, std::unique_ptr<MapObject>> mapObjects;
 };

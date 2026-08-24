@@ -34,6 +34,7 @@
 #include <random>
 #include <sstream>
 #include <time.h>
+#include <unordered_set>
 
 #ifdef ARDUINO_ARCH_ESP32
 #include <esp_heap_caps.h>
@@ -1018,7 +1019,6 @@ void TFTView_320x240::resetNodeListForTesting(void)
     updateActiveChats();
     selectNode(0);
     ownNode = 0;
-
     nodeCount = 0;
     nodesOnline = 0;
     nodesFiltered = 0;
@@ -1139,6 +1139,16 @@ const char *TFTView_320x240::nodeDisplayNameForTesting(NodeId id) const
 const char *TFTView_320x240::nodeShortNameForTesting(NodeId id) const
 {
     return nodeShortName(id);
+}
+
+std::array<char, 4> TFTView_320x240::nodeShortNameCacheForTesting(NodeId id) const
+{
+    const lv_obj_t *panel = nodePanel(id);
+    if (!panel) {
+        return {};
+    }
+    const char *userData = reinterpret_cast<const char *>(&(panel->LV_OBJ_IDX(node_lbs_idx)->user_data));
+    return {userData[0], userData[1], userData[2], userData[3]};
 }
 
 NodePosition TFTView_320x240::nodePositionForTesting(NodeId id) const
@@ -1305,9 +1315,68 @@ bool TFTView_320x240::mapPanelVisibleForTesting() const
     return activePanel == objects.map_panel && !lv_obj_has_flag(objects.map_panel, LV_OBJ_FLAG_HIDDEN);
 }
 
+void TFTView_320x240::showMapForTesting()
+{
+    ui_set_active(objects.map_button, objects.map_panel, objects.top_map_panel);
+    loadMap();
+}
+
+bool TFTView_320x240::mapMarkerFilteredForTesting(NodeId id) const
+{
+    return map && map->objectFilteredForTesting(id);
+}
+
+void TFTView_320x240::resetMapFilterCountersForTesting()
+{
+    visibleNodes.resetContainsCallCountForTesting();
+    if (map) {
+        map->resetFilterUpdateCountForTesting();
+    }
+}
+
+uint32_t TFTView_320x240::mapFilterUpdateCountForTesting() const
+{
+    return map ? map->filterUpdateCountForTesting() : 0;
+}
+
+uint32_t TFTView_320x240::visibleNodeContainsCallCountForTesting() const
+{
+    return visibleNodes.containsCallCountForTesting();
+}
+
 uintptr_t TFTView_320x240::topMessagesNodeImageSrcForTesting() const
 {
     return reinterpret_cast<uintptr_t>(lv_obj_get_style_bg_image_src(objects.top_messages_node_image, LV_PART_MAIN));
+}
+
+const char *TFTView_320x240::homeBatteryPercentageTextForTesting() const
+{
+    return lv_label_get_text(objects.battery_percentage_label);
+}
+
+uintptr_t TFTView_320x240::homeBatteryImageSrcForTesting() const
+{
+    return reinterpret_cast<uintptr_t>(lv_obj_get_style_bg_image_src(objects.battery_image, LV_PART_MAIN));
+}
+
+void TFTView_320x240::setNodeNameFilterForTesting(const char *text)
+{
+    lv_textarea_set_text(objects.nodes_filter_name_area, text ? text : "");
+}
+
+void TFTView_320x240::setNodeHighlightNameForTesting(const char *text)
+{
+    lv_textarea_set_text(objects.nodes_hl_name_area, text ? text : "");
+}
+
+const char *TFTView_320x240::chatButtonLabelTextForTesting() const
+{
+    return lv_label_get_text(objects.chats_button_label);
+}
+
+const char *TFTView_320x240::settingsUserLabelTextForTesting() const
+{
+    return lv_label_get_text(objects.basic_settings_user_label);
 }
 
 const char *TFTView_320x240::firstTraceRouteTowardsLabelForTesting() const
@@ -1766,6 +1835,7 @@ void TFTView_320x240::ui_set_active(lv_obj_t *b, lv_obj_t *p, lv_obj_t *tp)
         if (useVirtualNodeList && activePanel == objects.nodes_panel && virtualNodeListHost) {
             lv_obj_add_flag(virtualNodeListHost, LV_OBJ_FLAG_HIDDEN);
             setInputGroup();
+            virtualNodeListInputVisibilityKnown = false;
         }
 #endif
         if (activePanel == objects.messages_panel) {
@@ -1812,7 +1882,7 @@ void TFTView_320x240::ui_set_active(lv_obj_t *b, lv_obj_t *p, lv_obj_t *tp)
     } else if (inputdriver->hasKeyboardDevice() || inputdriver->hasEncoderDevice()) {
 #ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
         if (useVirtualNodeList && activePanel == objects.nodes_panel && virtualNodeList) {
-            setInputGroup(virtualNodeList->navigationGroup());
+            reconcileVirtualNodeListInputGroup(true);
             if (currentNode && visibleNodes.contains(currentNode)) {
                 virtualNodeList->focus(currentNode);
             } else if (!visibleNodes.ids().empty()) {
@@ -3925,6 +3995,9 @@ void TFTView_320x240::loadMap(void)
 #else
         map = new MapPanel(objects.raw_map_panel, new URLService());
 #endif
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+        mapFilterPublicationValid = false;
+#endif
         map->setHomeLocationImage(objects.home_location_image);
         lv_obj_add_flag(objects.home_location_image, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(objects.home_location_image, ui_event_mapNodeButton, LV_EVENT_CLICKED, (void *)ownNode);
@@ -4005,6 +4078,10 @@ void TFTView_320x240::loadMap(void)
         }
         updateLocationMap(map->getObjectsOnMap());
     }
+
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    publishMapFilter();
+#endif
 
     if (sdCard) {
         if (!sdCard->isUpdated()) {
@@ -4123,6 +4200,11 @@ void TFTView_320x240::addOrUpdateMap(uint32_t nodeNum, int32_t lat, int32_t lon)
             map->add(nodeNum, lat * 1e-7, lon * 1e-7, drawObjectCB);
             lv_obj_add_flag(img, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_add_event_cb(img, ui_event_mapNodeButton, LV_EVENT_CLICKED, (void *)nodeNum);
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+            if (useVirtualNodeList) {
+                map->update(nodeNum, !visibleNodes.contains(nodeNum));
+            }
+#endif
             updateLocationMap(map->getObjectsOnMap());
         }
     } else {
@@ -5241,7 +5323,9 @@ void TFTView_320x240::clearChatHistory(void)
     messages.clear();
     updateActiveChats();
     updateNodesFiltered(true);
-    syncNodeListPresentation();
+    // Bulk state change: force visible-row rebinding even when the filtered
+    // order is unchanged, so active-chat borders clear immediately.
+    syncNodeListPresentation(true);
     controller->removeTextMessages(0, 0, 0);
 }
 
@@ -6296,13 +6380,16 @@ void TFTView_320x240::addOrUpdateNode(uint32_t nodeNum, uint8_t channel, uint32_
     NodeMutation mutation{};
     const bool legacyNodeExists = nodes.find(nodeNum) != nodes.end();
     if (shouldMaintainNodeModel()) {
-        const uint32_t modelLastHeard =
+        const auto *existing = nodeStore.find(nodeNum);
+        const uint32_t incomingLastHeard =
             lastHeard && curtime && lastHeard > static_cast<uint32_t>(curtime) ? static_cast<uint32_t>(curtime) : lastHeard;
+        const uint32_t modelLastHeard = existing ? existing->lastHeard : incomingLastHeard;
+        const uint8_t modelChannel = existing ? existing->channel : channel;
         if (!nodeStore.find(nodeNum) && nodeStore.size() >= MAX_NUM_NODES_VIEW && !nodePurgeCandidate(nodeNum)) {
             syncNodeListPresentation();
             return;
         }
-        mutation = nodeStore.upsertUser(nodeNum, channel, modelLastHeard, cfg, false);
+        mutation = nodeStore.upsertUser(nodeNum, modelChannel, modelLastHeard, cfg, false);
         while (nodeStore.size() > MAX_NUM_NODES_VIEW) {
             if (!nodePurgeCandidate(nodeNum))
                 break;
@@ -6341,46 +6428,65 @@ void TFTView_320x240::updateNode(uint32_t nodeNum, uint8_t ch, const meshtastic_
 {
     const auto *existing = shouldMaintainNodeModel() ? nodeStore.find(nodeNum) : nullptr;
     uint32_t lh = existing ? existing->lastHeard : curtime;
+    // NODEINFO refreshes carry no usable channel; keep the stored one like the
+    // panel path, which never rewrites a row's channel after creation.
+    uint8_t modelChannel = ch;
+    NodePosition existingPosition{};
+    if (ch >= c_max_channels) {
+        modelChannel = existing ? existing->channel : 0;
+    }
+    if (existing) {
+        existingPosition = existing->position;
+    }
     NodeMutation mutation{};
     if (shouldMaintainNodeModel())
-        mutation = nodeStore.upsertUser(nodeNum, ch, lh, cfg, false);
+        mutation = nodeStore.upsertUser(nodeNum, modelChannel, lh, cfg, false);
     db.user = cfg;
+
+    // Own-node identity drives settings widgets and persisted config even when
+    // no row panel exists (the virtual node list retains no panels).
+    if (nodeNum == ownNode) {
+        // update related settings buttons and store role in image user data
+        char buf[30];
+        lv_snprintf(buf, sizeof(buf), _("User name: %s"), cfg.short_name);
+        lv_label_set_text(objects.basic_settings_user_label, buf);
+
+        char buf1[30], buf2[40];
+        lv_dropdown_set_selected(objects.settings_device_role_dropdown, role2val(meshtastic_Config_DeviceConfig_Role(cfg.role)));
+        lv_dropdown_get_selected_str(objects.settings_device_role_dropdown, buf1, sizeof(buf1));
+        lv_snprintf(buf2, sizeof(buf2), _("Device Role: %s"), buf1);
+        lv_label_set_text(objects.basic_settings_role_label, buf2);
+
+        // update DB
+        strcpy(db.short_name, cfg.short_name);
+        strcpy(db.long_name, cfg.long_name);
+        db.config.device.role = cfg.role;
+    }
+
     auto it = nodes.find(nodeNum);
     if (it != nodes.end() && it->second) {
-        if (it->first == ownNode) {
-            // update related settings buttons and store role in image user data
-            char buf[30];
-            lv_snprintf(buf, sizeof(buf), _("User name: %s"), cfg.short_name);
-            lv_label_set_text(objects.basic_settings_user_label, buf);
-
-            char buf1[30], buf2[40];
-            lv_dropdown_set_selected(objects.settings_device_role_dropdown,
-                                     role2val(meshtastic_Config_DeviceConfig_Role(cfg.role)));
-            lv_dropdown_get_selected_str(objects.settings_device_role_dropdown, buf1, sizeof(buf1));
-            lv_snprintf(buf2, sizeof(buf2), _("Device Role: %s"), buf1);
-            lv_label_set_text(objects.basic_settings_role_label, buf2);
-
-            // update DB
-            strcpy(db.short_name, cfg.short_name);
-            strcpy(db.long_name, cfg.long_name);
-            db.config.device.role = cfg.role;
-        }
         lv_label_set_text(it->second->LV_OBJ_IDX(node_lbl_idx), cfg.long_name);
         it->second->LV_OBJ_IDX(node_lbl_idx)->user_data = (void *)nodeNum;
-        lv_label_set_text(it->second->LV_OBJ_IDX(node_lbs_idx), cfg.short_name);
-        char *userData = (char *)&(it->second->LV_OBJ_IDX(node_lbs_idx)->user_data);
-        userData[0] = cfg.short_name[0];
-        if (userData[0] == 0x00)
-            userData[0] = ' ';
-        userData[1] = cfg.short_name[1];
-        if (userData[1] == 0x00)
-            userData[1] = ' ';
-        userData[2] = cfg.short_name[2];
-        if (userData[2] == 0x00)
-            userData[2] = ' ';
-        userData[3] = cfg.short_name[3];
-        if (userData[3] == 0x00)
-            userData[3] = ' ';
+
+        // Render the short name exactly like the row renderer: id fallback when
+        // too narrow, distance line when both positions are known.
+        lv_obj_t *shortLabel = it->second->LV_OBJ_IDX(node_lbs_idx);
+        char renderedShort[32]{};
+        if (nodeNum != ownNode && hasPosition && existingPosition.hasCoordinates()) {
+            NodeListRowPresentation::formatShortNameWithDistance(
+                renderedShort, sizeof(renderedShort), cfg.short_name, nodeNum, hasPosition, myLatitude, myLongitude,
+                existingPosition.latitude, existingPosition.longitude,
+                db.config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_METRIC);
+        } else {
+            NodeListRowPresentation::formatShortDisplayName(renderedShort, sizeof(renderedShort), cfg.short_name, nodeNum);
+        }
+        lv_label_set_text(shortLabel, renderedShort);
+        lv_obj_set_pos(shortLabel, 30, strchr(renderedShort, '\n') ? -1 : 10);
+
+        char *userData = (char *)&(shortLabel->user_data);
+        for (int i = 0; i < 4; ++i) {
+            userData[i] = renderedShort[i] != '\0' ? renderedShort[i] : ' ';
+        }
 
         setNodeImage(nodeNum, (MeshtasticView::eRole)cfg.role, cfg.has_is_unmessagable && cfg.is_unmessagable,
                      it->second->LV_OBJ_IDX(node_img_idx));
@@ -6399,6 +6505,13 @@ void TFTView_320x240::updateNode(uint32_t nodeNum, uint8_t ch, const meshtastic_
             char buf[64];
             lv_snprintf(buf, sizeof(buf), "%s: %s", lv_label_get_text(it->second->LV_OBJ_IDX(node_lbs_idx)),
                         lv_label_get_text(it->second->LV_OBJ_IDX(node_lbl_idx)));
+            lv_label_set_text(ct->second->spec_attr->children[0], buf);
+        }
+    } else if (nodeNum != 0) {
+        // No row panel (virtual node list): refresh chat titles from the store
+        auto ct = chats.find(nodeNum);
+        char buf[96];
+        if (ct != chats.end() && chatTitleFromModel(nodeNum, buf, sizeof(buf))) {
             lv_label_set_text(ct->second->spec_attr->children[0], buf);
         }
     }
@@ -6552,62 +6665,59 @@ void TFTView_320x240::updateMetrics(uint32_t nodeNum, uint32_t bat_level, float 
     if (shouldMaintainNodeModel())
         mutation = nodeStore.updateDeviceMetrics(nodeNum, devMetrics);
 
+    char buf[48];
     auto it = nodes.find(nodeNum);
-    if (it != nodes.end()) {
-        char buf[48];
-        if (it->first == ownNode) {
-            sprintf(buf, _("Util %0.1f%%  Air %0.1f%%"), chUtil, airUtil);
-            lv_label_set_text(it->second->LV_OBJ_IDX(node_sig_idx), buf);
+    if (it != nodes.end() && it->first == ownNode) {
+        sprintf(buf, _("Util %0.1f%%  Air %0.1f%%"), chUtil, airUtil);
+        lv_label_set_text(it->second->LV_OBJ_IDX(node_sig_idx), buf);
+    }
 
-            // update battery percentage and symbol
-            if (bat_level != 0 || voltage != 0) {
-                uint32_t shown_level = std::min(bat_level, (uint32_t)100);
-                sprintf(buf, "%d%%", shown_level);
-                bool alert = false;
+    // update battery percentage and symbol; keep this outside the row-panel
+    // lookup so the virtual node list (which retains no per-node panels) still
+    // drives the home-screen battery widgets
+    if (nodeNum == ownNode && (bat_level != 0 || voltage != 0)) {
+        uint32_t shown_level = std::min(bat_level, (uint32_t)100);
+        sprintf(buf, "%d%%", shown_level);
+        bool alert = false;
 
-                BatteryLevel level;
-                BatteryLevel::Status status = level.calcStatus(bat_level, voltage);
-                switch (status) {
-                case BatteryLevel::Plugged:
-                    lv_obj_set_style_bg_image_src(objects.battery_image, &img_battery_plug_image,
-                                                  LV_PART_MAIN | LV_STATE_DEFAULT);
-                    if (shown_level == 100)
-                        buf[0] = '\0';
-                    break;
-                case BatteryLevel::Charging:
-                    lv_obj_set_style_bg_image_src(objects.battery_image, &img_battery_bolt_image,
-                                                  LV_PART_MAIN | LV_STATE_DEFAULT);
-                    break;
-                case BatteryLevel::Full:
-                    lv_obj_set_style_bg_image_src(objects.battery_image, &img_battery_full_image,
-                                                  LV_PART_MAIN | LV_STATE_DEFAULT);
-                    break;
-                case BatteryLevel::Mid:
-                    lv_obj_set_style_bg_image_src(objects.battery_image, &img_battery_mid_image, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    break;
-                case BatteryLevel::Low:
-                    lv_obj_set_style_bg_image_src(objects.battery_image, &img_battery_low_image, LV_PART_MAIN | LV_STATE_DEFAULT);
-                    break;
-                case BatteryLevel::Empty:
-                    lv_obj_set_style_bg_image_src(objects.battery_image, &img_battery_empty_image,
-                                                  LV_PART_MAIN | LV_STATE_DEFAULT);
-                    break;
-                case BatteryLevel::Warn:
-                    lv_obj_set_style_bg_image_src(objects.battery_image, &img_battery_empty_warn_image,
-                                                  LV_PART_MAIN | LV_STATE_DEFAULT);
-                    buf[0] = '\0';
-                    alert = true;
-                    break;
-                default:
-                    ILOG_ERROR("unhandled battery level %d", status);
-                    break;
-                }
-                Themes::recolorTopLabel(objects.battery_percentage_label, alert);
-                lv_obj_set_style_bg_image_recolor_opa(objects.battery_image, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-                lv_label_set_text(objects.battery_percentage_label, buf);
-            }
+        BatteryLevel level;
+        BatteryLevel::Status status = level.calcStatus(bat_level, voltage);
+        switch (status) {
+        case BatteryLevel::Plugged:
+            lv_obj_set_style_bg_image_src(objects.battery_image, &img_battery_plug_image, LV_PART_MAIN | LV_STATE_DEFAULT);
+            if (shown_level == 100)
+                buf[0] = '\0';
+            break;
+        case BatteryLevel::Charging:
+            lv_obj_set_style_bg_image_src(objects.battery_image, &img_battery_bolt_image, LV_PART_MAIN | LV_STATE_DEFAULT);
+            break;
+        case BatteryLevel::Full:
+            lv_obj_set_style_bg_image_src(objects.battery_image, &img_battery_full_image, LV_PART_MAIN | LV_STATE_DEFAULT);
+            break;
+        case BatteryLevel::Mid:
+            lv_obj_set_style_bg_image_src(objects.battery_image, &img_battery_mid_image, LV_PART_MAIN | LV_STATE_DEFAULT);
+            break;
+        case BatteryLevel::Low:
+            lv_obj_set_style_bg_image_src(objects.battery_image, &img_battery_low_image, LV_PART_MAIN | LV_STATE_DEFAULT);
+            break;
+        case BatteryLevel::Empty:
+            lv_obj_set_style_bg_image_src(objects.battery_image, &img_battery_empty_image, LV_PART_MAIN | LV_STATE_DEFAULT);
+            break;
+        case BatteryLevel::Warn:
+            lv_obj_set_style_bg_image_src(objects.battery_image, &img_battery_empty_warn_image, LV_PART_MAIN | LV_STATE_DEFAULT);
+            buf[0] = '\0';
+            alert = true;
+            break;
+        default:
+            ILOG_ERROR("unhandled battery level %d", status);
+            break;
         }
+        Themes::recolorTopLabel(objects.battery_percentage_label, alert);
+        lv_obj_set_style_bg_image_recolor_opa(objects.battery_image, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_label_set_text(objects.battery_percentage_label, buf);
+    }
 
+    if (it != nodes.end()) {
         if (bat_level != 0 || voltage != 0) {
             bat_level = std::min(bat_level, (uint32_t)100);
             sprintf(buf, "%d%% %0.2fV", bat_level, voltage);
@@ -6892,6 +7002,10 @@ void TFTView_320x240::handleResponse(uint32_t from, const uint32_t id, const mes
                     if (shouldMaintainNodeModel())
                         nodeStore.markBadKey(from);
                     syncNodeListPresentation();
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+                    if (useVirtualNodeList)
+                        refreshVirtualNodePresentation(from);
+#endif
                     lv_obj_t *panel = nodePanel(from);
                     if (panel) {
                         panel->LV_OBJ_IDX(node_bat_idx)->user_data = (void *)2;
@@ -8268,7 +8382,7 @@ void TFTView_320x240::addChat(uint32_t from, uint32_t to, uint8_t ch)
         if (it != nodes.end()) {
             sprintf(buf, "%s: %s", lv_label_get_text(it->second->LV_OBJ_IDX(node_lbs_idx)),
                     lv_label_get_text(it->second->LV_OBJ_IDX(node_lbl_idx)));
-        } else {
+        } else if (!chatTitleFromModel(from, buf, sizeof(buf))) {
             sprintf(buf, "!%08x", from);
         }
     }
@@ -8673,13 +8787,95 @@ NodeListFilter TFTView_320x240::currentNodeListFilter(void) const
     }
     modelFilter.curTime = static_cast<uint32_t>(curtime);
     modelFilter.secsUntilOffline = secs_until_offline;
+    modelFilter.hasOwnPosition = hasPosition;
+    modelFilter.ownLatitude = myLatitude;
+    modelFilter.ownLongitude = myLongitude;
+    modelFilter.metricUnits = db.config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_METRIC;
     return modelFilter;
+}
+
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+NodeListRenderContext TFTView_320x240::nodeListRenderContext(void) const
+{
+    NodeListRenderContext context;
+    context.ownNode = ownNode;
+    context.hasOwnPosition = hasPosition;
+    context.ownLatitude = myLatitude;
+    context.ownLongitude = myLongitude;
+    context.metricUnits = db.config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_METRIC;
+    context.highlightActiveChat = lv_obj_has_state(objects.nodes_hl_active_chat_switch, LV_STATE_CHECKED);
+    context.highlightPosition = lv_obj_has_state(objects.nodes_hl_position_switch, LV_STATE_CHECKED);
+    context.highlightTelemetry = lv_obj_has_state(objects.nodes_hl_telemetry_switch, LV_STATE_CHECKED);
+    context.highlightIaq = lv_obj_has_state(objects.nodes_hliaq_switch, LV_STATE_CHECKED);
+    std::snprintf(context.highlightName, sizeof(context.highlightName), "%s", lv_textarea_get_text(objects.nodes_hl_name_area));
+    return context;
+}
+#endif
+
+// Chat entry title resolved from the node model, for nodes without a row panel.
+bool TFTView_320x240::chatTitleFromModel(uint32_t nodeNum, char *buf, size_t bufSize) const
+{
+    const auto *record = shouldMaintainNodeModel() ? nodeStore.find(nodeNum) : nullptr;
+    if (!record) {
+        return false;
+    }
+    char renderedShort[32];
+    if (nodeNum != ownNode && hasPosition && record->position.hasCoordinates()) {
+        NodeListRowPresentation::formatShortNameWithDistance(
+            renderedShort, sizeof(renderedShort), record->user.short_name, nodeNum, hasPosition, myLatitude, myLongitude,
+            record->position.latitude, record->position.longitude,
+            db.config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_METRIC);
+    } else {
+        NodeListRowPresentation::formatShortDisplayName(renderedShort, sizeof(renderedShort), record->user.short_name, nodeNum);
+    }
+    snprintf(buf, bufSize, "%s: %s", renderedShort, record->user.long_name);
+    return true;
 }
 
 void TFTView_320x240::syncVisibleNodeIndex(void)
 {
     visibleNodes.rebuild(nodeStore, currentNodeListFilter(), ownNode, NodeListFilterPolicy::LegacyCompatible);
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+    publishMapFilter();
+#endif
 }
+
+#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
+void TFTView_320x240::publishMapFilter()
+{
+    if (!useVirtualNodeList || !map ||
+        (mapFilterPublicationValid && publishedMapFilterGeneration == visibleNodes.membershipGeneration())) {
+        return;
+    }
+
+    const std::unordered_set<NodeId> visibleIds(visibleNodes.ids().begin(), visibleNodes.ids().end());
+    for (const auto &entry : nodeObjects) {
+        map->update(entry.first, visibleIds.find(entry.first) == visibleIds.end());
+    }
+    publishedMapFilterGeneration = visibleNodes.membershipGeneration();
+    mapFilterPublicationValid = true;
+}
+
+void TFTView_320x240::reconcileVirtualNodeListInputGroup(bool enteringNodeScreen)
+{
+    if (!virtualNodeList) {
+        return;
+    }
+
+    const bool hasVisibleNodes = !visibleNodes.empty();
+    if (!enteringNodeScreen && virtualNodeListInputVisibilityKnown && virtualNodeListInputHadVisibleNodes == hasVisibleNodes) {
+        return;
+    }
+
+    if (hasVisibleNodes) {
+        setInputGroup(virtualNodeList->navigationGroup());
+    } else {
+        setInputGroup();
+    }
+    virtualNodeListInputVisibilityKnown = true;
+    virtualNodeListInputHadVisibleNodes = hasVisibleNodes;
+}
+#endif
 
 bool TFTView_320x240::shouldMaintainNodeModel(void) const
 {
@@ -8720,19 +8916,11 @@ void TFTView_320x240::syncNodeListPresentation(bool forceRebind)
     updateNodesStatus();
     ensureVirtualNodeList();
     if (virtualNodeList) {
-        NodeListRenderContext context;
-        context.ownNode = ownNode;
-        context.hasOwnPosition = hasPosition;
-        context.ownLatitude = myLatitude;
-        context.ownLongitude = myLongitude;
-        context.metricUnits = db.config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_METRIC;
-        context.highlightActiveChat = lv_obj_has_state(objects.nodes_hl_active_chat_switch, LV_STATE_CHECKED);
-        context.highlightPosition = lv_obj_has_state(objects.nodes_hl_position_switch, LV_STATE_CHECKED);
-        context.highlightTelemetry = lv_obj_has_state(objects.nodes_hl_telemetry_switch, LV_STATE_CHECKED);
-        context.highlightIaq = lv_obj_has_state(objects.nodes_hliaq_switch, LV_STATE_CHECKED);
-        std::snprintf(context.highlightName, sizeof(context.highlightName), "%s",
-                      lv_textarea_get_text(objects.nodes_hl_name_area));
-        virtualNodeList->sync(nodeStore, visibleNodes, currentNode, static_cast<uint32_t>(curtime), context, forceRebind);
+        virtualNodeList->sync(nodeStore, visibleNodes, currentNode, static_cast<uint32_t>(curtime), nodeListRenderContext(),
+                              forceRebind);
+        if (activePanel == objects.nodes_panel) {
+            reconcileVirtualNodeListInputGroup(false);
+        }
     }
 #endif
 }
@@ -8763,7 +8951,8 @@ bool TFTView_320x240::mutationCanRefreshVirtualRow(const NodeMutation &mutation)
         return false;
     }
 
-    uint32_t contentFields = NodeFieldSignal | NodeFieldDeviceMetrics | NodeFieldEnvironmentMetrics | NodeFieldAirQualityMetrics;
+    uint32_t contentFields =
+        NodeFieldSignal | NodeFieldDeviceMetrics | NodeFieldEnvironmentMetrics | NodeFieldAirQualityMetrics | NodeFieldActiveChat;
     const int hopsFilter = static_cast<int>(lv_dropdown_get_selected(objects.nodes_filter_hops_dropdown));
     if (!hopsFilter) {
         contentFields |= NodeFieldHops;
@@ -8777,19 +8966,7 @@ bool TFTView_320x240::refreshVirtualNodePresentation(NodeId id)
     if (!virtualNodeList) {
         return false;
     }
-
-    NodeListRenderContext context;
-    context.ownNode = ownNode;
-    context.hasOwnPosition = hasPosition;
-    context.ownLatitude = myLatitude;
-    context.ownLongitude = myLongitude;
-    context.metricUnits = db.config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_METRIC;
-    context.highlightActiveChat = lv_obj_has_state(objects.nodes_hl_active_chat_switch, LV_STATE_CHECKED);
-    context.highlightPosition = lv_obj_has_state(objects.nodes_hl_position_switch, LV_STATE_CHECKED);
-    context.highlightTelemetry = lv_obj_has_state(objects.nodes_hl_telemetry_switch, LV_STATE_CHECKED);
-    context.highlightIaq = lv_obj_has_state(objects.nodes_hliaq_switch, LV_STATE_CHECKED);
-    std::snprintf(context.highlightName, sizeof(context.highlightName), "%s", lv_textarea_get_text(objects.nodes_hl_name_area));
-    return virtualNodeList->refreshNode(id, static_cast<uint32_t>(curtime), context);
+    return virtualNodeList->refreshNode(id, static_cast<uint32_t>(curtime), nodeListRenderContext());
 }
 
 void TFTView_320x240::ensureVirtualNodeList(void)

@@ -25,6 +25,16 @@ HeadlessDisplayDriver &headlessDisplayDriver()
     return driver;
 }
 
+} // namespace
+
+MuiTestHarness::MuiTestHarness()
+    : MuiTestHarness(DisplayDriverConfig(DisplayDriverConfig::device_t::NONE, 320, 240), &headlessDisplayDriver())
+{
+}
+#endif
+
+namespace
+{
 struct TestInputEvent {
     uint32_t key = 0;
     int16_t encoderDiff = 0;
@@ -77,12 +87,6 @@ void dispatchTestEncoderDelta(lv_indev_t *input, int16_t diff)
     lv_indev_set_user_data(input, nullptr);
 }
 } // namespace
-
-MuiTestHarness::MuiTestHarness()
-    : MuiTestHarness(DisplayDriverConfig(DisplayDriverConfig::device_t::NONE, 320, 240), &headlessDisplayDriver())
-{
-}
-#endif
 
 class MuiRecordingViewController : public ViewController
 {
@@ -165,6 +169,17 @@ void MuiTestHarness::addUnknownNodeFixture(uint32_t nodeId, uint8_t channel, uin
 {
     static_cast<MeshtasticView *>(view)->addOrUpdateNode(nodeId, channel, lastHeard, static_cast<MeshtasticView::eRole>(role),
                                                          hasKey, viaMqtt);
+}
+
+void MuiTestHarness::addOrUpdateNodeFixture(uint32_t nodeId, const char *shortName, const char *longName, uint32_t lastHeard,
+                                            uint8_t role, bool hasKey, uint8_t channel)
+{
+    meshtastic_User user = meshtastic_User_init_default;
+    std::strncpy(user.short_name, shortName, sizeof(user.short_name) - 1);
+    std::strncpy(user.long_name, longName, sizeof(user.long_name) - 1);
+    user.role = static_cast<meshtastic_Config_DeviceConfig_Role>(role);
+    user.public_key.size = hasKey ? 1 : 0;
+    static_cast<MeshtasticView *>(view)->addOrUpdateNode(nodeId, channel, lastHeard, user);
 }
 
 void MuiTestHarness::updateNodeFixture(uint32_t nodeId, const char *shortName, const char *longName, uint8_t role, bool hasKey,
@@ -439,6 +454,11 @@ const char *MuiTestHarness::nodeShortName(uint32_t nodeId) const
     return view->nodeShortNameForTesting(nodeId);
 }
 
+std::array<char, 4> MuiTestHarness::nodeShortNameCache(uint32_t nodeId) const
+{
+    return view->nodeShortNameCacheForTesting(nodeId);
+}
+
 NodePosition MuiTestHarness::nodePosition(uint32_t nodeId) const
 {
     return view->nodePositionForTesting(nodeId);
@@ -576,9 +596,72 @@ bool MuiTestHarness::mapPanelVisible() const
     return view->mapPanelVisibleForTesting();
 }
 
+void MuiTestHarness::showMapScreen()
+{
+    view->showMapForTesting();
+}
+
+bool MuiTestHarness::mapMarkerFiltered(uint32_t nodeId) const
+{
+    return view->mapMarkerFilteredForTesting(nodeId);
+}
+
+void MuiTestHarness::resetMapFilterCounters()
+{
+    view->resetMapFilterCountersForTesting();
+}
+
+uint32_t MuiTestHarness::mapFilterUpdateCount() const
+{
+    return view->mapFilterUpdateCountForTesting();
+}
+
+uint32_t MuiTestHarness::visibleNodeContainsCallCount() const
+{
+    return view->visibleNodeContainsCallCountForTesting();
+}
+
 uintptr_t MuiTestHarness::topMessagesNodeImageSrc() const
 {
     return view->topMessagesNodeImageSrcForTesting();
+}
+
+const char *MuiTestHarness::homeBatteryPercentageText() const
+{
+    return view->homeBatteryPercentageTextForTesting();
+}
+
+uintptr_t MuiTestHarness::homeBatteryImageSrc() const
+{
+    return view->homeBatteryImageSrcForTesting();
+}
+
+void MuiTestHarness::setNodeNameFilter(const char *text)
+{
+    view->setNodeNameFilterForTesting(text);
+    scanNodeFilters();
+}
+
+void MuiTestHarness::setNodeHighlightName(const char *text)
+{
+    view->setNodeHighlightNameForTesting(text);
+    scanNodeFilters();
+}
+
+const char *MuiTestHarness::chatButtonLabel() const
+{
+    return view->chatButtonLabelTextForTesting();
+}
+
+const char *MuiTestHarness::settingsUserLabelText() const
+{
+    return view->settingsUserLabelTextForTesting();
+}
+
+void MuiTestHarness::runLastHeardTickFixture()
+{
+    view->updateAllLastHeardForTesting();
+    pump();
 }
 
 const char *MuiTestHarness::firstTraceRouteTowardsLabel() const
@@ -778,6 +861,48 @@ const VisibleNodeIndex &MuiTestHarness::visibleIndex() const
     return view->visibleNodesForTesting();
 }
 
+MuiRowSnapshot snapshotMuiRow(lv_obj_t *row)
+{
+    lv_obj_t *image = lv_obj_get_child(row, 0);
+    lv_obj_t *longName = lv_obj_get_child(row, 2);
+    lv_obj_t *shortName = lv_obj_get_child(row, 3);
+    lv_obj_t *signal = lv_obj_get_child(row, 6);
+    return {
+        lv_label_get_text(longName),
+        lv_label_get_text(shortName),
+        lv_label_get_text(lv_obj_get_child(row, 4)),
+        lv_label_get_text(lv_obj_get_child(row, 5)),
+        lv_label_get_text(signal),
+        lv_label_get_text(lv_obj_get_child(row, 7)),
+        lv_label_get_text(lv_obj_get_child(row, 8)),
+        lv_label_get_text(lv_obj_get_child(row, 9)),
+        lv_label_get_text(lv_obj_get_child(row, 10)),
+        lv_obj_get_y_aligned(shortName),
+        lv_color_to_u32(lv_obj_get_style_bg_color(image, LV_PART_MAIN)),
+        lv_color_to_u32(lv_obj_get_style_border_color(image, LV_PART_MAIN)),
+        lv_color_to_u32(lv_obj_get_style_image_recolor(image, LV_PART_MAIN)),
+        lv_obj_get_style_image_recolor_opa(image, LV_PART_MAIN),
+        reinterpret_cast<uintptr_t>(lv_image_get_src(image)),
+        lv_color_to_u32(lv_obj_get_style_bg_color(row, LV_PART_MAIN)),
+        lv_color_to_u32(lv_obj_get_style_border_color(row, LV_PART_MAIN)),
+        lv_obj_get_x(image),
+        lv_obj_get_y(image),
+        lv_obj_get_x(longName),
+        lv_obj_get_y(longName),
+        lv_obj_get_x(shortName),
+        lv_obj_get_x(signal),
+        lv_obj_get_y(signal),
+        lv_obj_get_width(row),
+        lv_obj_get_width(signal),
+        static_cast<int32_t>(lv_label_get_long_mode(signal)),
+        lv_obj_has_flag(lv_obj_get_child(row, 7), LV_OBJ_FLAG_HIDDEN),
+        lv_obj_has_flag(lv_obj_get_child(row, 8), LV_OBJ_FLAG_HIDDEN),
+        lv_obj_has_flag(lv_obj_get_child(row, 9), LV_OBJ_FLAG_HIDDEN),
+        lv_obj_has_flag(lv_obj_get_child(row, 10), LV_OBJ_FLAG_HIDDEN),
+        reinterpret_cast<uintptr_t>(lv_obj_get_style_text_font(shortName, LV_PART_MAIN)),
+    };
+}
+
 MuiRowSnapshot MuiTestHarness::legacyRowSnapshot(uint32_t nodeId) const
 {
     lv_obj_t *root = view->nodeListRootForTesting();
@@ -795,39 +920,7 @@ MuiRowSnapshot MuiTestHarness::legacyRowSnapshot(uint32_t nodeId) const
         if (static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(longName))) != nodeId) {
             continue;
         }
-
-        lv_obj_t *image = lv_obj_get_child(row, 0);
-        lv_obj_t *signal = lv_obj_get_child(row, 6);
-        lv_obj_t *shortName = lv_obj_get_child(row, 3);
-        return {
-            lv_label_get_text(longName),
-            lv_label_get_text(shortName),
-            lv_label_get_text(lv_obj_get_child(row, 4)),
-            lv_label_get_text(lv_obj_get_child(row, 5)),
-            lv_label_get_text(lv_obj_get_child(row, 6)),
-            lv_label_get_text(lv_obj_get_child(row, 7)),
-            lv_label_get_text(lv_obj_get_child(row, 8)),
-            lv_label_get_text(lv_obj_get_child(row, 9)),
-            lv_label_get_text(lv_obj_get_child(row, 10)),
-            lv_obj_get_y_aligned(shortName),
-            lv_color_to_u32(lv_obj_get_style_bg_color(image, LV_PART_MAIN)),
-            lv_color_to_u32(lv_obj_get_style_border_color(image, LV_PART_MAIN)),
-            lv_color_to_u32(lv_obj_get_style_image_recolor(image, LV_PART_MAIN)),
-            lv_obj_get_style_image_recolor_opa(image, LV_PART_MAIN),
-            reinterpret_cast<uintptr_t>(lv_image_get_src(image)),
-            lv_color_to_u32(lv_obj_get_style_bg_color(row, LV_PART_MAIN)),
-            lv_color_to_u32(lv_obj_get_style_border_color(row, LV_PART_MAIN)),
-            lv_obj_get_x(image),
-            lv_obj_get_y(image),
-            lv_obj_get_x(longName),
-            lv_obj_get_y(longName),
-            lv_obj_get_x(shortName),
-            lv_obj_get_x(signal),
-            lv_obj_get_y(signal),
-            lv_obj_get_width(row),
-            lv_obj_get_width(signal),
-            static_cast<int32_t>(lv_label_get_long_mode(signal)),
-        };
+        return snapshotMuiRow(row);
     }
     return {};
 }

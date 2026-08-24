@@ -10,18 +10,22 @@
 #include "graphics/view/TFT/VirtualNodeList.h"
 #include "lvgl.h"
 #include <algorithm>
+#include <atomic>
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <new>
 #include <random>
 #include <sstream>
 #include <string_view>
+#include <sys/resource.h>
 #include <utility>
 
 #ifndef DEVICE_UI_SOURCE_REVISION
@@ -36,6 +40,73 @@ namespace
 {
 using Clock = std::chrono::steady_clock;
 
+enum class RusageMaxRssUnit {
+    Bytes,
+    Kilobytes,
+};
+
+size_t rssBytesFromRusage(long maxRss, RusageMaxRssUnit unit)
+{
+    if (maxRss <= 0) {
+        return 0;
+    }
+    const auto value = static_cast<size_t>(maxRss);
+    return unit == RusageMaxRssUnit::Bytes ? value : value * 1024U;
+}
+
+size_t currentMaxRssBytes()
+{
+    struct rusage usage{};
+    getrusage(RUSAGE_SELF, &usage);
+#ifdef __APPLE__
+    return rssBytesFromRusage(usage.ru_maxrss, RusageMaxRssUnit::Bytes);
+#else
+    return rssBytesFromRusage(usage.ru_maxrss, RusageMaxRssUnit::Kilobytes);
+#endif
+}
+
+using MallocFunction = void *(*)(std::size_t);
+
+void *allocateForBenchmarkNew(std::size_t size, MallocFunction mallocFunction)
+{
+    void *ptr = mallocFunction(size ? size : 1);
+    if (!ptr) {
+        throw std::bad_alloc();
+    }
+    return ptr;
+}
+
+#if defined(NODE_LIST_BENCH_EXECUTABLE)
+struct HeapAccounting {
+    std::atomic<size_t> count{0};
+    std::atomic<size_t> bytes{0};
+};
+HeapAccounting &heapAccounting()
+{
+    static HeapAccounting accounting;
+    return accounting;
+}
+} // namespace
+void *operator new(std::size_t size)
+{
+    void *ptr = allocateForBenchmarkNew(size, std::malloc);
+    heapAccounting().count.fetch_add(1, std::memory_order_relaxed);
+    heapAccounting().bytes.fetch_add(size, std::memory_order_relaxed);
+    return ptr;
+}
+void operator delete(void *ptr) noexcept
+{
+    std::free(ptr);
+}
+void operator delete(void *ptr, std::size_t) noexcept
+{
+    std::free(ptr);
+}
+namespace
+{
+#else
+#endif
+
 struct NodeFixture {
     uint32_t id;
     std::string shortName;
@@ -49,7 +120,10 @@ struct NodeFixture {
     bool hasTelemetry;
 };
 
-constexpr const char *comparisonScope = "Host-relative structural, CPU, and allocator comparison; not hardware timing.";
+constexpr const char *comparisonScope =
+    "Host-relative structural/CPU/allocator/LVGL-heap comparison with C++ new-delimiter counters and peak RSS; "
+    "not hardware timing. The X11 simulator pair is a functional parity smoke only: its cadence includes "
+    "deliberate sleep frames and must never be read as a performance comparison.";
 constexpr size_t allocatorUsedCountSlack = 8;
 constexpr size_t measuredCycleCount = 2;
 
@@ -519,6 +593,19 @@ bool parseNodeListBenchmarkCommandLine(int argc, const char *const *argv, NodeLi
     return sawNodes && sawTrials && sawSeed && sawJson;
 }
 
+#ifdef UNIT_TEST
+void *nodeListBenchmarkAllocateForNewForTesting(size_t size, NodeListBenchmarkMallocForTesting mallocFunction)
+{
+    return allocateForBenchmarkNew(size, mallocFunction);
+}
+
+size_t nodeListBenchmarkRssBytesForTesting(long maxRss, NodeListBenchmarkRssUnit unit)
+{
+    return rssBytesFromRusage(maxRss,
+                              unit == NodeListBenchmarkRssUnit::Bytes ? RusageMaxRssUnit::Bytes : RusageMaxRssUnit::Kilobytes);
+}
+#endif
+
 namespace
 {
 NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOptions &options, NodeListBenchmarkReport report)
@@ -764,6 +851,11 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
 
     lv_mem_monitor_t memory{};
     lv_mem_monitor(&memory);
+    report.heap.maxRssBytes = currentMaxRssBytes();
+#ifdef NODE_LIST_BENCH_EXECUTABLE
+    report.heap.newCount = heapAccounting().count.load();
+    report.heap.newBytes = heapAccounting().bytes.load();
+#endif
     report.memory.totalSize = memory.total_size;
     report.memory.freeCount = memory.free_cnt;
     report.memory.freeSize = memory.free_size;
@@ -1063,6 +1155,11 @@ NodeListBenchmarkReport runNodeListBenchmark(const NodeListBenchmarkOptions &opt
 
     lv_mem_monitor_t memory{};
     lv_mem_monitor(&memory);
+    report.heap.maxRssBytes = currentMaxRssBytes();
+#ifdef NODE_LIST_BENCH_EXECUTABLE
+    report.heap.newCount = heapAccounting().count.load();
+    report.heap.newBytes = heapAccounting().bytes.load();
+#endif
     report.memory.totalSize = memory.total_size;
     report.memory.freeCount = memory.free_cnt;
     report.memory.freeSize = memory.free_size;
@@ -1119,6 +1216,8 @@ bool writeNodeListBenchmarkJson(const NodeListBenchmarkReport &report, const std
                << escapeJson(fixture.reason) << "\"}";
     }
     output << "]\n  },\n"
+           << "  \"heap\": {\"new_count\": " << report.heap.newCount << ", \"new_bytes\": " << report.heap.newBytes
+           << ", \"max_rss_bytes\": " << report.heap.maxRssBytes << "},\n"
            << "  \"memory\": {\"total_size\": " << report.memory.totalSize << ", \"free_count\": " << report.memory.freeCount
            << ", \"free_size\": " << report.memory.freeSize << ", \"biggest_free_block\": " << report.memory.biggestFreeBlock
            << ", \"used_count\": " << report.memory.usedCount << ", \"max_used\": " << report.memory.maxUsed

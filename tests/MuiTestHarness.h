@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 #include "graphics/common/NodeStore.h"
 #include "graphics/common/VisibleNodeIndex.h"
 #include "graphics/driver/DisplayDriverConfig.h"
@@ -65,7 +67,15 @@ struct MuiRowSnapshot {
     int32_t rowWidth = 0;
     int32_t signalWidth = 0;
     int32_t signalLongMode = 0;
+    bool position1Hidden = false;
+    bool position2Hidden = false;
+    bool telemetry1Hidden = false;
+    bool telemetry2Hidden = false;
+    uintptr_t shortNameFont = 0;
 };
+
+// Capture a MuiRowSnapshot from a rendered 11-child node row panel.
+MuiRowSnapshot snapshotMuiRow(lv_obj_t *row);
 
 class MuiTestHarness
 {
@@ -82,6 +92,8 @@ class MuiTestHarness
                         uint32_t lastHeard = 0, uint8_t role = 0, bool hasKey = true, bool unmessagable = false,
                         uint8_t channel = 0);
     void addUnknownNodeFixture(uint32_t nodeId, uint8_t channel, uint32_t lastHeard, uint8_t role, bool hasKey, bool viaMqtt);
+    void addOrUpdateNodeFixture(uint32_t nodeId, const char *shortName, const char *longName, uint32_t lastHeard, uint8_t role,
+                                bool hasKey, uint8_t channel);
     void updateNodeFixture(uint32_t nodeId, const char *shortName, const char *longName, uint8_t role, bool hasKey,
                            bool unmessagable = false, uint8_t channel = 0);
     void updatePositionFixture(uint32_t nodeId, int32_t latitude, int32_t longitude, int32_t altitude = 0,
@@ -120,6 +132,7 @@ class MuiTestHarness
     int8_t nodeHops(uint32_t nodeId) const;
     const char *nodeDisplayName(uint32_t nodeId) const;
     const char *nodeShortName(uint32_t nodeId) const;
+    std::array<char, 4> nodeShortNameCache(uint32_t nodeId) const;
     NodePosition nodePosition(uint32_t nodeId) const;
     uint32_t nodePurgeCandidate(uint32_t incoming) const;
     void purgeLegacyNode(uint32_t incoming);
@@ -147,7 +160,19 @@ class MuiTestHarness
     uint32_t selectedNode() const;
     bool messagesPanelVisible() const;
     bool mapPanelVisible() const;
+    void showMapScreen();
+    bool mapMarkerFiltered(uint32_t nodeId) const;
+    void resetMapFilterCounters();
+    uint32_t mapFilterUpdateCount() const;
+    uint32_t visibleNodeContainsCallCount() const;
     uintptr_t topMessagesNodeImageSrc() const;
+    const char *homeBatteryPercentageText() const;
+    uintptr_t homeBatteryImageSrc() const;
+    void setNodeNameFilter(const char *text);
+    void setNodeHighlightName(const char *text);
+    const char *chatButtonLabel() const;
+    const char *settingsUserLabelText() const;
+    void runLastHeardTickFixture();
     const char *firstTraceRouteTowardsLabel() const;
     uintptr_t firstTraceRouteTowardsImageSrc() const;
     void clickFirstTraceRouteTowardsButton();

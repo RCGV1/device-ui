@@ -2,6 +2,7 @@
 
 #include "graphics/common/NodeStore.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -18,6 +19,13 @@ struct NodeListFilter {
     std::string name;
     uint32_t curTime = 0;
     uint32_t secsUntilOffline = 900; // default 15 minutes
+
+    // Own-position context so name matching runs against the rendered
+    // short-name text, including the id fallback and the distance line.
+    bool hasOwnPosition = false;
+    int32_t ownLatitude = 0;
+    int32_t ownLongitude = 0;
+    bool metricUnits = true;
 };
 
 enum class NodeListFilterPolicy { LegacyCompatible };
@@ -31,13 +39,32 @@ class VisibleNodeIndex
     size_t size() const { return visibleIds.size(); }
     bool empty() const { return visibleIds.empty(); }
     uint32_t generation() const { return rebuildGeneration; }
+    uint32_t membershipGeneration() const { return visibleMembershipGeneration; }
 
     std::optional<size_t> indexOf(NodeId id) const;
     bool contains(NodeId id) const;
+
+#ifdef UNIT_TEST
+    void resetContainsCallCountForTesting() const { containsCallCount = 0; }
+    uint32_t containsCallCountForTesting() const { return containsCallCount; }
+    uint32_t membershipProbeCountForTesting() const { return membershipProbeCount; }
+    size_t rebuildScratchCapacityForTesting() const { return rebuildScratch.capacity(); }
+    const NodeId *membershipStorageForTesting() const { return visibleMembership.data(); }
+    size_t membershipStorageCapacityForTesting() const { return visibleMembership.size(); }
+    size_t membershipStorageSizeForTesting() const { return visibleMembershipSize; }
+#endif
 
     static bool isVisible(const NodeRecord &node, const NodeListFilter &filter, NodeId ownNode, NodeListFilterPolicy policy);
 
   private:
     std::vector<NodeId> visibleIds;
+    std::vector<NodeId> rebuildScratch;
+    std::array<NodeId, 250> visibleMembership{};
+    size_t visibleMembershipSize = 0;
     uint32_t rebuildGeneration = 0;
+    uint32_t visibleMembershipGeneration = 0;
+#ifdef UNIT_TEST
+    mutable uint32_t containsCallCount = 0;
+    uint32_t membershipProbeCount = 0;
+#endif
 };

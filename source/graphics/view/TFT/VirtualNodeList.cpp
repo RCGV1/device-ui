@@ -32,23 +32,19 @@ template <size_t Size> void setRowText(lv_obj_t *label, char (&storage)[Size], c
 
 void formatLastHeard(uint32_t lastHeard, uint32_t currentTime, char *buffer, size_t bufferSize)
 {
-    if (lastHeard == 0) {
-        buffer[0] = '\0';
+    NodeListRowPresentation::formatLastHeardLabel(lastHeard, currentTime, _("now"), buffer, bufferSize);
+}
+
+void formatShortName(const NodeRecord &record, const NodeListRenderContext &context, char *buffer, size_t bufferSize)
+{
+    // Remote rows carry a distance line only when both positions are known.
+    if (!context.hasOwnPosition || record.id == context.ownNode || !record.position.hasCoordinates()) {
+        NodeListRowPresentation::formatShortDisplayName(buffer, bufferSize, record.user.short_name, record.id);
         return;
     }
-
-    const uint32_t age = currentTime > lastHeard ? currentTime - lastHeard : 0;
-    if (age < 60) {
-        std::snprintf(buffer, bufferSize, _("now"));
-    } else if (age < 3600) {
-        std::snprintf(buffer, bufferSize, "%u min", age / 60);
-    } else if (age < 86400) {
-        std::snprintf(buffer, bufferSize, "%u h", age / 3600);
-    } else if (age < 86400 * 60) {
-        std::snprintf(buffer, bufferSize, "%u d", age / 86400);
-    } else {
-        buffer[0] = '\0';
-    }
+    NodeListRowPresentation::formatShortNameWithDistance(
+        buffer, bufferSize, record.user.short_name, record.id, context.hasOwnPosition, context.ownLatitude, context.ownLongitude,
+        record.position.latitude, record.position.longitude, context.metricUnits);
 }
 
 void setHidden(lv_obj_t *obj, bool hidden)
@@ -64,6 +60,7 @@ void clearRowBinding(ReusableRow &row)
 {
     row.boundId = 0;
     row.pressedId = 0;
+    row.detailKeysValid = false;
     if (row.panel) {
         lv_obj_set_user_data(row.panel, nullptr);
     }
@@ -153,53 +150,6 @@ void setRoleImage(const NodeRecord &record, lv_obj_t *img)
         }
     }
     NodeListRowPresentation::applyNodeImage(img, record.id, source, record.unmessagable, true);
-}
-
-void formatLegacyShortDisplay(char *dest, size_t destSize, const char *shortName, NodeId nodeId)
-{
-    if (destSize == 0) {
-        return;
-    }
-
-    if (!shortName || lv_txt_get_width(shortName, std::strlen(shortName), &ui_font_montserrat_14, 0) <= 4) {
-        std::snprintf(dest, destSize, "%04x", static_cast<unsigned int>(nodeId & 0xffff));
-    } else {
-        std::snprintf(dest, destSize, "%s", shortName);
-    }
-}
-
-void formatShortName(const NodeRecord &record, const NodeListRenderContext &context, char *buffer, size_t bufferSize)
-{
-    formatLegacyShortDisplay(buffer, bufferSize, record.user.short_name, record.id);
-
-    if (!context.hasOwnPosition || !record.position.hasCoordinates() || record.id == context.ownNode || bufferSize < 6) {
-        return;
-    }
-
-    for (size_t i = 0; i < 4 && i + 1 < bufferSize; ++i) {
-        if (buffer[i] == '\0') {
-            buffer[i] = ' ';
-        }
-    }
-
-    const float dx = 71.5f * 1e-7f * static_cast<float>(context.ownLongitude - record.position.longitude);
-    const float dy = 111.3f * 1e-7f * static_cast<float>(context.ownLatitude - record.position.latitude);
-    const float dist = std::sqrt(dx * dx + dy * dy);
-
-    buffer[4] = '\n';
-    if (context.metricUnits) {
-        if (dist > 1.0f) {
-            std::snprintf(&buffer[5], bufferSize - 5, "%.1f km ", dist);
-        } else {
-            std::snprintf(&buffer[5], bufferSize - 5, "%u m ", static_cast<unsigned int>(std::round(dist * 1000.0f)));
-        }
-    } else {
-        if (dist > 0.1f) {
-            std::snprintf(&buffer[5], bufferSize - 5, "%.1f mi ", std::round(dist * 0.621371f));
-        } else {
-            std::snprintf(&buffer[5], bufferSize - 5, "%u ft ", static_cast<unsigned int>(dist * 3280.84f));
-        }
-    }
 }
 } // namespace
 
@@ -421,6 +371,13 @@ void VirtualNodeList::updateVirtualContentHeight()
 
 void VirtualNodeList::updateExpandedIndexCache()
 {
+    // The scan reruns only when the expanded ids or the index actually changed.
+    if (expansionCacheValid && expansionCacheIndex == currentIndex &&
+        expansionCacheGeneration == (currentIndex ? currentIndex->generation() : 0) && expansionCacheExpandedId == expandedId &&
+        expansionCachePreviousId == previousExpandedId) {
+        return;
+    }
+
     expandedIndex = std::numeric_limits<size_t>::max();
     previousExpandedIndex = std::numeric_limits<size_t>::max();
 
@@ -443,6 +400,12 @@ void VirtualNodeList::updateExpandedIndexCache()
     if (previousExpandedId != expandedId) {
         previousExpandedIndex = cacheIndex(previousExpandedId);
     }
+
+    expansionCacheValid = true;
+    expansionCacheIndex = currentIndex;
+    expansionCacheGeneration = currentIndex->generation();
+    expansionCacheExpandedId = expandedId;
+    expansionCachePreviousId = previousExpandedId;
 }
 
 VirtualNodeList::ScrollAnchor VirtualNodeList::captureScrollAnchor() const
@@ -488,7 +451,7 @@ void VirtualNodeList::sync(const NodeStore &store, const VisibleNodeIndex &index
 {
     const uint32_t nextTime = now != 0 ? now : static_cast<uint32_t>(std::time(nullptr));
     const bool indexChanged = currentIndex != &index || lastSyncedIndexGeneration != index.generation();
-    const bool timeChanged = currentTime != nextTime;
+    const bool timeChanged = currentTime != nextTime && visibleLastHeardLabelsNeedRefresh(store, nextTime, context);
     const bool contextChanged =
         renderContext.ownNode != context.ownNode || renderContext.hasOwnPosition != context.hasOwnPosition ||
         renderContext.ownLatitude != context.ownLatitude || renderContext.ownLongitude != context.ownLongitude ||
@@ -511,6 +474,31 @@ void VirtualNodeList::sync(const NodeStore &store, const VisibleNodeIndex &index
     }
     refreshVisibleRows(indexChanged || rebindVisibleRows, rebindVisibleRows);
     lastSyncedIndexGeneration = index.generation();
+}
+
+bool VirtualNodeList::visibleLastHeardLabelsNeedRefresh(const NodeStore &store, uint32_t nextTime,
+                                                        const NodeListRenderContext &context) const
+{
+    if (currentTime == 0) {
+        return false;
+    }
+
+    for (const auto &row : rowPool) {
+        if (!row.boundId || !row.panel || lv_obj_has_flag(row.panel, LV_OBJ_FLAG_HIDDEN)) {
+            continue;
+        }
+        const NodeRecord *record = store.find(row.boundId);
+        if (!record) {
+            continue;
+        }
+        const uint32_t effectiveLastHeard = record->id != 0 && record->id == context.ownNode ? nextTime : record->lastHeard;
+        char nextText[sizeof(row.lastHeardText)]{};
+        formatLastHeard(effectiveLastHeard, nextTime, nextText, sizeof(nextText));
+        if (std::strcmp(nextText, row.lastHeardText) != 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void VirtualNodeList::setExpanded(NodeId id)
@@ -770,16 +758,27 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     lv_obj_set_pos(row.lblShort, 30, std::strchr(row.shortText, '\n') ? -1 : 10);
     setRowText(row.lblLong, row.longText, record.user.long_name);
 
-    if (record.hasDeviceMetrics && (record.deviceMetrics.battery_level != 0 || record.deviceMetrics.voltage != 0.0f)) {
-        std::snprintf(row.batteryText, sizeof(row.batteryText), "%u%% %0.2fV",
-                      static_cast<unsigned int>(std::min<uint32_t>(record.deviceMetrics.battery_level, 100)),
-                      record.deviceMetrics.voltage);
-    } else {
-        row.batteryText[0] = '\0';
+    const bool hasBattery =
+        record.hasDeviceMetrics && (record.deviceMetrics.battery_level != 0 || record.deviceMetrics.voltage != 0.0f);
+    if (!row.detailKeysValid || row.detailHasBattery != hasBattery ||
+        (hasBattery &&
+         (row.detailBatteryLevel != record.deviceMetrics.battery_level || row.detailVoltage != record.deviceMetrics.voltage))) {
+        if (hasBattery) {
+            NodeListRowPresentation::formatBatteryLabel(record.deviceMetrics.battery_level, record.deviceMetrics.voltage,
+                                                        row.batteryText, sizeof(row.batteryText));
+        } else {
+            row.batteryText[0] = '\0';
+        }
+        lv_label_set_text_static(row.lblBat, row.batteryText);
+        row.detailHasBattery = hasBattery;
+        row.detailBatteryLevel = record.deviceMetrics.battery_level;
+        row.detailVoltage = record.deviceMetrics.voltage;
     }
-    lv_label_set_text_static(row.lblBat, row.batteryText);
 
-    formatLastHeard(record.lastHeard, currentTime, row.lastHeardText, sizeof(row.lastHeardText));
+    // The own-node row always reports "now"; ordering is pinned by the visible
+    // index even as the model last-heard timestamp continues to update.
+    const uint32_t effectiveLastHeard = record.id != 0 && record.id == renderContext.ownNode ? currentTime : record.lastHeard;
+    formatLastHeard(effectiveLastHeard, currentTime, row.lastHeardText, sizeof(row.lastHeardText));
     lv_label_set_text_static(row.lblLh, row.lastHeardText);
 
     if (record.id == renderContext.ownNode && record.hasDeviceMetrics) {
@@ -797,25 +796,28 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     lv_obj_set_width(row.lblSig, LV_SIZE_CONTENT);
     lv_obj_set_height(row.lblSig, LV_SIZE_CONTENT);
 
-    row.positionText[0] = '\0';
-    row.position2Text[0] = '\0';
-    row.telemetry1Text[0] = '\0';
-    row.telemetry2Text[0] = '\0';
-
-    const bool showPosition = isExpanded && record.position.hasCoordinates();
-    if (showPosition) {
-        int32_t altitude = std::abs(record.position.altitude) < 10000 ? record.position.altitude : 0;
-        const char *altitudeUnits = "m";
-        if (!renderContext.metricUnits) {
-            altitude = static_cast<int32_t>(static_cast<float>(altitude) * 3.28084f);
-            altitudeUnits = "ft";
+    // Extended detail labels stay populated and visible once data arrives;
+    // a collapsed COLLAPSED_ROW_HEIGHT panel clips them down to a sliver.
+    const bool showPosition = record.position.hasCoordinates();
+    const bool positionChanged = !row.detailKeysValid || row.detailLatitude != record.position.latitude ||
+                                 row.detailLongitude != record.position.longitude ||
+                                 row.detailAltitude != record.position.altitude ||
+                                 row.detailMetricUnits != renderContext.metricUnits;
+    if (positionChanged) {
+        if (showPosition) {
+            NodeListRowPresentation::formatPositionLines(record.position.latitude, record.position.longitude,
+                                                         record.position.altitude, renderContext.metricUnits, row.positionText,
+                                                         sizeof(row.positionText), row.position2Text, sizeof(row.position2Text));
+        } else {
+            row.positionText[0] = '\0';
+            row.position2Text[0] = '\0';
         }
-        std::snprintf(row.positionText, sizeof(row.positionText), "%.5f %.5f", record.position.latitude * 1e-7,
-                      record.position.longitude * 1e-7);
-        std::snprintf(row.position2Text, sizeof(row.position2Text), "%d%s MSL", static_cast<int>(altitude), altitudeUnits);
+        lv_label_set_text_static(row.lblPos1, row.positionText);
+        lv_label_set_text_static(row.lblPos2, row.position2Text);
+        row.detailLatitude = record.position.latitude;
+        row.detailLongitude = record.position.longitude;
+        row.detailAltitude = record.position.altitude;
     }
-    lv_label_set_text_static(row.lblPos1, row.positionText);
-    lv_label_set_text_static(row.lblPos2, row.position2Text);
     if (showPosition && record.id != renderContext.ownNode) {
         lv_obj_add_flag(row.lblPos1, LV_OBJ_FLAG_CLICKABLE);
     } else {
@@ -824,43 +826,39 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
     setHidden(row.lblPos1, !showPosition);
     setHidden(row.lblPos2, !showPosition);
 
-    const bool showTelemetry1 = isExpanded && record.hasEnvironmentMetrics;
-    if (showTelemetry1) {
-        const auto &metrics = record.environmentMetrics;
-        if (renderContext.metricUnits && static_cast<int>(metrics.relative_humidity) > 0) {
-            std::snprintf(row.telemetry1Text, sizeof(row.telemetry1Text), "%2.1f°C %d%% %3.1fhPa", metrics.temperature,
-                          static_cast<int>(metrics.relative_humidity), metrics.barometric_pressure);
-        } else if (renderContext.metricUnits) {
-            std::snprintf(row.telemetry1Text, sizeof(row.telemetry1Text), "%2.1f°C %3.1fhPa", metrics.temperature,
-                          metrics.barometric_pressure);
-        } else if (static_cast<int>(metrics.relative_humidity) > 0) {
-            std::snprintf(row.telemetry1Text, sizeof(row.telemetry1Text), "%2.1f°F %d%% %3.1finHg",
-                          metrics.temperature * 9 / 5 + 32, static_cast<int>(metrics.relative_humidity),
-                          metrics.barometric_pressure / 33.86f);
+    const bool showTelemetry1 = record.hasEnvironmentMetrics;
+    const auto &env = record.environmentMetrics;
+    const bool environmentChanged =
+        !row.detailKeysValid || row.detailHasEnvironment != showTelemetry1 ||
+        row.detailMetricUnits != renderContext.metricUnits ||
+        (showTelemetry1 &&
+         (row.detailEnvironment.temperature != env.temperature ||
+          row.detailEnvironment.relative_humidity != env.relative_humidity ||
+          row.detailEnvironment.barometric_pressure != env.barometric_pressure || row.detailEnvironment.iaq != env.iaq ||
+          row.detailEnvironment.voltage != env.voltage || row.detailEnvironment.current != env.current));
+    if (environmentChanged) {
+        if (showTelemetry1) {
+            NodeListRowPresentation::formatTelemetryLines(record.environmentMetrics, renderContext.metricUnits,
+                                                          row.telemetry1Text, sizeof(row.telemetry1Text), row.telemetry2Text,
+                                                          sizeof(row.telemetry2Text));
         } else {
-            std::snprintf(row.telemetry1Text, sizeof(row.telemetry1Text), "%2.1f°F %3.1finHg", metrics.temperature * 9 / 5 + 32,
-                          metrics.barometric_pressure / 33.86f);
+            row.telemetry1Text[0] = '\0';
+            row.telemetry2Text[0] = '\0';
+        }
+        lv_label_set_text_static(row.lblTm1, row.telemetry1Text);
+        lv_label_set_text_static(row.lblTm2, row.telemetry2Text);
+        row.detailHasEnvironment = showTelemetry1;
+        if (showTelemetry1) {
+            row.detailEnvironment = env;
         }
     }
-    lv_label_set_text_static(row.lblTm1, row.telemetry1Text);
     setHidden(row.lblTm1, !showTelemetry1);
-
     const bool showTelemetry2 =
-        isExpanded && record.hasEnvironmentMetrics && record.environmentMetrics.iaq > 0 && record.environmentMetrics.iaq < 1000;
-    if (showTelemetry2) {
-        const auto &metrics = record.environmentMetrics;
-        std::snprintf(row.telemetry2Text, sizeof(row.telemetry2Text), "IAQ: %d %.1fV %.1fmA", static_cast<int>(metrics.iaq),
-                      metrics.voltage, metrics.current);
-    }
-    lv_label_set_text_static(row.lblTm2, row.telemetry2Text);
+        record.hasEnvironmentMetrics && record.environmentMetrics.iaq > 0 && record.environmentMetrics.iaq < 1000;
     setHidden(row.lblTm2, !showTelemetry2);
 
-    if (!isExpanded) {
-        setHidden(row.lblPos1, true);
-        setHidden(row.lblPos2, true);
-        setHidden(row.lblTm1, true);
-        setHidden(row.lblTm2, true);
-    }
+    row.detailMetricUnits = renderContext.metricUnits;
+    row.detailKeysValid = true;
 
     applyHighlight(row, record);
 }
@@ -885,17 +883,11 @@ void VirtualNodeList::applyHighlight(ReusableRow &row, const NodeRecord &record)
     if (renderContext.highlightIaq && record.hasEnvironmentMetrics && record.environmentMetrics.iaq > 0 &&
         record.environmentMetrics.iaq < 1000) {
         const uint32_t iaq = record.environmentMetrics.iaq;
-        const lv_color_t color = iaq <= 50    ? lv_color_hex(0x000ce810)
-                                 : iaq <= 100 ? lv_color_hex(0x00faf646)
-                                 : iaq <= 150 ? lv_color_hex(0x00f98204)
-                                 : iaq <= 200 ? lv_color_hex(0x00e42104)
-                                 : iaq <= 300 ? lv_color_hex(0x009b2970)
-                                              : lv_color_hex(0x001d1414);
-        lv_obj_set_style_border_color(row.panel, color, LV_PART_MAIN | LV_STATE_DEFAULT);
+        const auto [iaqTextColor, iaqBgColor] = NodeListRowPresentation::iaqColors(iaq);
+        lv_obj_set_style_border_color(row.panel, iaqBgColor, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_border_width(row.panel, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_text_color(row.lblTm2, iaq <= 200 ? lv_color_hex(0x00000000) : lv_color_hex(0xffffffff),
-                                    LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_color(row.lblTm2, color, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_color(row.lblTm2, iaqTextColor, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_color(row.lblTm2, iaqBgColor, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_bg_opa(row.lblTm2, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
         highlighted = true;
     } else {
@@ -903,8 +895,10 @@ void VirtualNodeList::applyHighlight(ReusableRow &row, const NodeRecord &record)
         lv_obj_remove_local_style_prop(row.lblTm2, LV_STYLE_TEXT_COLOR, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_remove_local_style_prop(row.lblTm2, LV_STYLE_BG_COLOR, LV_PART_MAIN | LV_STATE_DEFAULT);
     }
+    // Name highlight matches the rendered short-name text, including the id
+    // fallback and the distance line.
     const char *name = renderContext.highlightName;
-    if (name[0] != '\0' && (strcasestr(record.user.long_name, name) || strcasestr(record.user.short_name, name))) {
+    if (name[0] != '\0' && (strcasestr(record.user.long_name, name) || strcasestr(row.shortText, name))) {
         lv_obj_set_style_border_color(row.panel, highlightMesh, LV_PART_MAIN | LV_STATE_DEFAULT);
         highlighted = true;
     }

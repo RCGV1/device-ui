@@ -36,6 +36,22 @@ struct NodeListScrollTelemetry {
     uint64_t worstFrameNs = 0;
 };
 
+struct NodeListHeapInstrumentation {
+    size_t newCount = 0;
+    size_t newBytes = 0;
+    size_t maxRssBytes = 0;
+};
+
+#ifdef UNIT_TEST
+enum class NodeListBenchmarkRssUnit {
+    Bytes,
+    Kilobytes,
+};
+using NodeListBenchmarkMallocForTesting = void *(*)(size_t);
+void *nodeListBenchmarkAllocateForNewForTesting(size_t size, NodeListBenchmarkMallocForTesting mallocFunction);
+size_t nodeListBenchmarkRssBytesForTesting(long maxRss, NodeListBenchmarkRssUnit unit);
+#endif
+
 struct NodeListAllocatorSnapshot {
     size_t freeSize = 0;
     size_t biggestFreeBlock = 0;
@@ -133,6 +149,7 @@ struct NodeListBenchmarkReport {
         bool integrityOk = false;
     } memory;
     std::optional<NodeListCandidateAllocatorTelemetry> allocatorTelemetry;
+    NodeListHeapInstrumentation heap;
     struct {
         size_t nodes = 0;
         size_t trials = 0;

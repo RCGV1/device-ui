@@ -131,6 +131,23 @@ TEST_CASE("node store updates position telemetry and radio fields on an existing
     CHECK(record.hasActiveChat);
 }
 
+TEST_CASE("node store retains channel and last-heard metadata when an unknown update fills identity")
+{
+    NodeStore store;
+    constexpr NodeId nodeId = 0x1a2b3c4d;
+    store.upsertUnknown(nodeId, 3, 100, meshtastic_Config_DeviceConfig_Role_CLIENT, false, false);
+
+    const NodeMutation mutation = store.upsertUnknown(nodeId, 7, 200, meshtastic_Config_DeviceConfig_Role_ROUTER, true, true);
+
+    CHECK(mutation.kind == NodeMutationKind::Updated);
+    REQUIRE(store.find(nodeId) != nullptr);
+    CHECK(store.find(nodeId)->channel == 3);
+    CHECK(store.find(nodeId)->lastHeard == 100);
+    CHECK(store.find(nodeId)->user.role == meshtastic_Config_DeviceConfig_Role_ROUTER);
+    CHECK(store.find(nodeId)->hasKey);
+    CHECK(store.find(nodeId)->viaMqtt);
+}
+
 TEST_CASE("node store preserves legacy-visible position and battery fields across incomplete updates")
 {
     NodeStore store;
