@@ -48,7 +48,10 @@ void convertPixelToRgb(lv_color_format_t format, const uint8_t *source, uint8_t 
 }
 } // namespace
 
-HeadlessDisplayDriver::HeadlessDisplayDriver() : DisplayDriver(320, 240), rgbFrame(screenWidth * screenHeight * 3, 0) {}
+HeadlessDisplayDriver::HeadlessDisplayDriver()
+    : DisplayDriver(MUI_TEST_DISPLAY_WIDTH, MUI_TEST_DISPLAY_HEIGHT), rgbFrame(screenWidth * screenHeight * 3, 0)
+{
+}
 
 void HeadlessDisplayDriver::init(DeviceGUI *gui)
 {

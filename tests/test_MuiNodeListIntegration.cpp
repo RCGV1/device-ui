@@ -1,8 +1,10 @@
 #include "MuiTestHarness.h"
 #include "graphics/common/MeshtasticView.h"
+#include "graphics/common/ViewController.h"
 #include "graphics/view/TFT/TFTView_320x240.h"
 #include "graphics/view/TFT/VirtualNodeList.h"
 #include "images.h"
+#include "mesh-pb-constants.h"
 #include <array>
 #include <cstring>
 #include <doctest/doctest.h>
@@ -61,7 +63,6 @@ TEST_CASE("view updates model fields before rendering a current row")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeModelFixture();
 
     harness.addNodeFixture(0x12345678, "ALPH", "Alpha Node", 1000, 0, true, false, 1);
     const auto *node = harness.node(0x12345678);
@@ -99,11 +100,54 @@ TEST_CASE("view updates model fields before rendering a current row")
     CHECK(node->hopsAway == 3);
 }
 
+TEST_CASE("node discovery burst coalesces list rendering until the next UI frame")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    const uint32_t bindsBeforeDiscovery = harness.virtualNodeListBindGeneration();
+    for (uint32_t index = 0; index < 39; ++index) {
+        harness.viewForTesting()->addNode(0x42000000U + index, 0, "DISC", "Discovered Node", 1000U + index,
+                                          MeshtasticView::client, true, false);
+        harness.viewForTesting()->updatePosition(0x42000000U + index, 377749000 + static_cast<int32_t>(index), -1224194000, 10, 0,
+                                                 0);
+    }
+
+    CHECK(harness.store().size() == 39);
+    CHECK(harness.virtualNodeListBindGeneration() == bindsBeforeDiscovery);
+
+    harness.pump(90);
+    harness.viewForTesting()->addNode(0x42000027U, 0, "DISC", "Discovered Node", 1039U, MeshtasticView::client, true, false);
+    harness.viewForTesting()->updatePosition(0x42000027U, 377749039, -1224194000, 10, 0, 0);
+    CHECK(harness.virtualNodeListBindGeneration() == bindsBeforeDiscovery);
+
+    harness.pump(10);
+    harness.viewForTesting()->task_handler();
+
+    CHECK(harness.renderedNodeCount() == 40);
+    CHECK(harness.virtualNodeListBindGeneration() <= bindsBeforeDiscovery + VirtualNodeList::POOL_SIZE);
+}
+
+TEST_CASE("early discovery flush rebinds an updated retained row")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    constexpr NodeId retainedId = 0x42000001;
+    harness.addNodeFixture(retainedId, "OLD", "Old Node", 1000U);
+    const uint32_t bindsBeforeUpdate = harness.virtualNodeListBindGeneration();
+
+    harness.viewForTesting()->addNode(0x42000002, 0, "NEW", "Discovered Node", 1001U, MeshtasticView::client, true, false);
+    harness.viewForTesting()->addNode(retainedId, 0, "NEW", "Updated Node", 1002U, MeshtasticView::client, true, false);
+    harness.viewForTesting()->updateNodesFilteredForTesting(true);
+
+    CHECK(harness.virtualNodeListBindGeneration() == bindsBeforeUpdate + 2);
+}
+
 TEST_CASE("node model tracks removals and store purge integrity")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeModelFixture();
 
     harness.addNodeFixture(0x0001, "N1", "Node 1", 100);
     harness.addNodeFixture(0x0002, "N2", "Node 2", 200);
@@ -120,7 +164,6 @@ TEST_CASE("unknown ingress keeps model identity and MQTT provenance")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeModelFixture();
 
     harness.addUnknownNodeFixture(0x1234abcd, 3, 1000, static_cast<uint8_t>(MeshtasticView::unknown), false, true);
 
@@ -137,7 +180,6 @@ TEST_CASE("last-heard updates keep the model in sync with the node row")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeModelFixture();
     harness.addNodeFixture(0x12345678, "ALPH", "Alpha Node", 100);
     harness.setCurrentTime(900);
 
@@ -148,11 +190,34 @@ TEST_CASE("last-heard updates keep the model in sync with the node row")
     CHECK(node->lastHeard == 900);
 }
 
+TEST_CASE("future last-heard timestamps remain online")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(1000U);
+    harness.addOrUpdateNodeFixture(0x12345678, "FUT", "Future Node", 1000U, MeshtasticView::client, true, 0);
+    harness.setCurrentTime(999U);
+    harness.viewForTesting()->updateNodesFilteredForTesting(true);
+
+    CHECK(harness.nodesOnlineCount() == 1);
+}
+
+TEST_CASE("own-node position updates accept an extreme altitude")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setOwnNodeFixture(0x12345678);
+    harness.addNodeFixture(0x12345678, "OWN", "Own Node", 1000U);
+
+    harness.updatePositionFixture(0x12345678, 1, 1, INT32_MIN);
+
+    CHECK(harness.nodePosition(0x12345678).altitude == INT32_MIN);
+}
+
 TEST_CASE("virtual NodeInfo refreshes retain established channel and last-heard model fields")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
 
     constexpr NodeId nodeId = 0x12345678;
     harness.addOrUpdateNodeFixture(nodeId, "ONE", "First NodeInfo", 100, MeshtasticView::client, true, 3);
@@ -165,17 +230,15 @@ TEST_CASE("virtual NodeInfo refreshes retain established channel and last-heard 
     CHECK(std::string(node->user.long_name) == "Refreshed NodeInfo");
 }
 
-TEST_CASE("default node list keeps retained row panels as the production path")
+TEST_CASE("default node list keeps a bounded row pool")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.populateLegacyNodeFixtures(25);
+    harness.populateNodeFixtures(25);
 
-    CHECK_FALSE(harness.virtualNodeListEnabled());
-    CHECK(harness.legacyRetainedNodeCount() == 25);
-    CHECK(harness.renderedNodeCount() == 25);
-    CHECK(harness.store().size() == 0);
-    CHECK(harness.visibleIndex().size() == 0);
+    CHECK(harness.nodeListObjectCount() <= 1 + VirtualNodeList::POOL_SIZE * 15);
+    CHECK(harness.store().size() == 25);
+    CHECK(harness.visibleIndex().size() == 25);
 }
 
 TEST_CASE("retained node updates pad a one-character short-name cache without distance")
@@ -195,7 +258,6 @@ TEST_CASE("visible node index resyncs after retained model mutations")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeModelFixture();
     harness.setCurrentTime(1700000000U);
 
     SUBCASE("insertion")
@@ -262,7 +324,6 @@ TEST_CASE("visible node index resyncs after retained model mutations")
     }
 }
 
-#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
 namespace
 {
 NodeId renderedVirtualNodeAt(MuiTestHarness &harness, size_t visibleIndex)
@@ -328,6 +389,78 @@ MuiRowSnapshot virtualRowSnapshot(MuiTestHarness &harness, NodeId id)
     return {};
 }
 
+class ControllerPacketIngress : public ViewController
+{
+  public:
+    using ViewController::packetReceived;
+};
+
+TEST_CASE("node discovery flushes retained-row updates received during its batch")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.addNodeFixture(1, "OLD", "Existing Node", 1000U);
+
+    harness.viewForTesting()->addNode(2, 0, "NEW", "Discovered Node", 1001U, MeshtasticView::client, true, false);
+    harness.updateSignalFixture(1, -88, 7.5f);
+
+    harness.pump(100);
+    harness.viewForTesting()->task_handler();
+
+    CHECK(virtualRowSnapshot(harness, 1).signal == "rssi: -88 snr: 7.5");
+}
+
+TEST_CASE("controller packet batches virtual node presentation mutations")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(1700000000U);
+
+    constexpr NodeId nodeId = 0x12345678U;
+    harness.addUnknownNodeFixture(nodeId, 0, 100U, static_cast<uint8_t>(MeshtasticView::unknown), false, false);
+    harness.viewForTesting()->updateNodesFilteredForTesting(true);
+    harness.showNodesScreen();
+
+    const uint32_t bindsBeforeSingleSync = harness.virtualNodeListBindGeneration();
+    harness.viewForTesting()->notifyResync(true);
+    const uint32_t singleSyncBinds = harness.virtualNodeListBindGeneration() - bindsBeforeSingleSync;
+    REQUIRE(singleSyncBinds > 0);
+
+    ControllerPacketIngress controller;
+    controller.init(harness.viewForTesting(), nullptr);
+
+    meshtastic_Position position = meshtastic_Position_init_default;
+    position.has_latitude_i = true;
+    position.latitude_i = 377749000;
+    position.has_longitude_i = true;
+    position.longitude_i = -1224194000;
+    position.has_altitude = true;
+    position.altitude = 10;
+
+    meshtastic_MeshPacket packet = meshtastic_MeshPacket_init_default;
+    packet.from = nodeId;
+    packet.to = 0xffffffffU;
+    packet.hop_start = 1;
+    packet.hop_limit = 1;
+    packet.rx_rssi = -88;
+    packet.rx_snr = 7.5f;
+    packet.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
+    packet.decoded.portnum = meshtastic_PortNum_POSITION_APP;
+    packet.decoded.payload.size = pb_encode_to_bytes(packet.decoded.payload.bytes, sizeof(packet.decoded.payload.bytes),
+                                                     &meshtastic_Position_msg, &position);
+    REQUIRE(packet.decoded.payload.size > 0);
+
+    const uint32_t bindsBeforePacket = harness.virtualNodeListBindGeneration();
+
+    CHECK(controller.packetReceived(packet));
+
+    CHECK(harness.virtualNodeListBindGeneration() == bindsBeforePacket + singleSyncBinds);
+    REQUIRE(harness.node(nodeId) != nullptr);
+    CHECK(harness.node(nodeId)->lastHeard == 1700000000U);
+    CHECK(harness.node(nodeId)->position.latitude == 377749000);
+    CHECK(harness.node(nodeId)->signalDisplay == NodeSignalDisplayKind::Rssi);
+}
+
 lv_obj_t *virtualPositionLabel(MuiTestHarness &harness, NodeId id)
 {
     lv_obj_t *root = harness.nodeListRootForTesting();
@@ -347,54 +480,26 @@ lv_obj_t *virtualPositionLabel(MuiTestHarness &harness, NodeId id)
 }
 } // namespace
 
-TEST_CASE("gated virtual node list reuses the bounded retained-list viewport")
+TEST_CASE("node list reuses a bounded viewport")
 {
     for (size_t nodeCount : {25U, 100U, 250U}) {
         CAPTURE(nodeCount);
         MuiTestHarness harness;
         harness.resetNodeList();
-        harness.enableVirtualNodeListFixture();
-        harness.populateLegacyNodeFixtures(nodeCount);
+        harness.populateNodeFixtures(nodeCount);
         harness.showNodesScreen();
 
-        CHECK(harness.virtualNodeListEnabled());
-        CHECK(harness.legacyNodeListRootForTesting() == harness.nodeListRootForTesting());
-        CHECK(harness.legacyRetainedNodeCount() == 0);
         CHECK(harness.renderedNodeCount() == nodeCount);
         CHECK(harness.visibleIndex().size() == nodeCount);
         CHECK(harness.nodeListObjectCount() <= 100);
     }
 }
 
-TEST_CASE("gated virtual node list restores the retained-list viewport when reset")
-{
-    MuiTestHarness harness;
-    harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
-    harness.populateLegacyNodeFixtures(30);
-    harness.showNodesScreen();
-
-    lv_obj_t *root = harness.nodeListRootForTesting();
-    REQUIRE(root != nullptr);
-    lv_obj_scroll_by(root, 0, 100, LV_ANIM_OFF);
-    harness.pump();
-    REQUIRE(lv_obj_get_scroll_y(root) != 0);
-
-    harness.resetNodeList();
-    root = harness.legacyNodeListRootForTesting();
-    REQUIRE(root != nullptr);
-    CHECK(lv_obj_get_scroll_y(root) == 0);
-    CHECK(lv_obj_get_style_layout(root, LV_PART_MAIN) == LV_LAYOUT_FLEX);
-    REQUIRE(lv_obj_get_child_count(root) > 0);
-    CHECK_FALSE(lv_obj_has_flag(lv_obj_get_child(root, 0), LV_OBJ_FLAG_HIDDEN));
-}
-
 TEST_CASE("gated virtual node list does not rebind its pool for a pixel scroll inside the same logical window")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
-    harness.populateLegacyNodeFixtures(25);
+    harness.populateNodeFixtures(25);
     harness.showNodesScreen();
 
     lv_obj_t *root = harness.nodeListRootForTesting();
@@ -411,7 +516,6 @@ TEST_CASE("gated virtual node list consumes filter work after the first virtual 
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     harness.addNodeFixture(0x11111111, "OLD", "Old Node", 100U);
@@ -436,7 +540,6 @@ TEST_CASE("gated virtual node list renders mutation resyncs")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     SUBCASE("user update rebinds visible row text")
@@ -524,7 +627,6 @@ TEST_CASE("gated virtual node list avoids redundant mutation presentation work")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     for (uint32_t i = 1; i <= 20; ++i) {
@@ -610,6 +712,7 @@ TEST_CASE("gated virtual node list avoids redundant mutation presentation work")
         const uint32_t bindsBefore = harness.virtualNodeListBindGeneration();
 
         harness.viewForTesting()->addOrUpdateNode(0x101, 0, 1700000000U, user);
+        harness.scanNodeFilters();
 
         CHECK(harness.virtualNodeListBindGeneration() <= bindsBefore + VirtualNodeList::POOL_SIZE);
         CHECK(renderedVirtualNodeAt(harness, 0) == 0x101);
@@ -631,7 +734,6 @@ TEST_CASE("gated virtual node list click expands and collapses by NodeId")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     harness.addNodeFixture(0x11111111, "ONE", "One Node", 1699999900U, MeshtasticView::router, true, false, 1);
@@ -662,7 +764,6 @@ TEST_CASE("gated virtual node list ordinary click does not rebuild the visible i
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     for (uint32_t i = 1; i <= 30; ++i) {
@@ -691,7 +792,6 @@ TEST_CASE("gated virtual node list long press opens only retained-permitted dire
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
     harness.setLoRaHopLimit(7);
 
@@ -720,7 +820,6 @@ TEST_CASE("gated virtual node list scan and traceroute route by selected NodeId"
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
     harness.setLoRaHopLimit(7);
 
@@ -745,7 +844,6 @@ TEST_CASE("gated virtual trace-route result callbacks reopen nodes by model Node
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     harness.addNodeFixture(0x11111111, "ONE", "One Node", 1699999900U, MeshtasticView::router, true, false, 1);
@@ -762,7 +860,6 @@ TEST_CASE("gated virtual map and chat result callbacks reopen nodes by model Nod
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     harness.addNodeFixture(0x11111111, "ONE", "One Node", 1699999900U, MeshtasticView::router, true, false, 1);
@@ -782,7 +879,6 @@ TEST_CASE("gated virtual bad-key routing updates model presentation and message 
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     constexpr NodeId nodeId = 0x11111111;
@@ -811,7 +907,6 @@ TEST_CASE("gated virtual bad-key routing repaints the visible row border immedia
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     constexpr NodeId nodeId = 0x11111111;
@@ -832,7 +927,6 @@ TEST_CASE("gated virtual node list keeps home battery widgets live from own-node
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     constexpr NodeId ownNode = 0x1a2b3c4d;
@@ -853,7 +947,6 @@ TEST_CASE("gated virtual direct messages resolve chat titles from the node model
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     constexpr NodeId nodeId = 0x33333333;
@@ -869,7 +962,6 @@ TEST_CASE("gated virtual name filtering matches rendered short names including i
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     // Blank short names render as the %04x id fallback on both implementations.
@@ -890,7 +982,6 @@ TEST_CASE("gated virtual highlight matches the rendered short-name label like th
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     constexpr NodeId fallbackNode = 0x12345678;
@@ -905,7 +996,6 @@ TEST_CASE("gated virtual name filtering matches the rendered distance line like 
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     constexpr NodeId ownNode = 0x1a2b3c4d;
@@ -926,7 +1016,6 @@ TEST_CASE("gated virtual node model keeps own-node settings widgets updated on r
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     constexpr NodeId ownNode = 0x1a2b3c4d;
@@ -943,7 +1032,6 @@ TEST_CASE("gated virtual node list keeps own node pinned first across recency pr
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     constexpr NodeId ownNode = 0x1a2b3c4d;
@@ -965,17 +1053,81 @@ TEST_CASE("gated virtual node list keeps own node pinned first across recency pr
     CHECK(harness.visibleIndex().ids()[1] == remoteNode);
 }
 
+TEST_CASE("gated virtual packet ingress from known sender preserves user data")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(1700000000U);
+
+    constexpr NodeId knownId = 0x11111111;
+    harness.addNodeFixture(knownId, "KNOWN", "Known Node", 1699999900U, MeshtasticView::router, true, false, 1);
+    harness.injectPacketFrom(knownId, 0xffffffff, 0);
+
+    const auto *node = harness.node(knownId);
+    REQUIRE(node != nullptr);
+    CHECK(node->hasUser);
+    CHECK(std::string(node->user.long_name) == "Known Node");
+    CHECK(node->user.role == meshtastic_Config_DeviceConfig_Role_ROUTER);
+    CHECK(node->hasKey);
+}
+
+TEST_CASE("gated virtual packet to known recipient preserves user data")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(1700000000U);
+    harness.setOwnNodeFixture(0xaaaa0001);
+
+    constexpr NodeId recipientId = 0x22222222;
+    harness.addNodeFixture(recipientId, "RECIP", "Recipient Node", 1699999900U, MeshtasticView::client, true, false, 2);
+    harness.injectPacketFrom(0x33333333, recipientId, 0);
+
+    const auto *node = harness.node(recipientId);
+    REQUIRE(node != nullptr);
+    CHECK(node->hasUser);
+    CHECK(std::string(node->user.long_name) == "Recipient Node");
+}
+
+TEST_CASE("gated virtual packet from absent sender creates unknown placeholder")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(1000U);
+
+    constexpr NodeId absentId = 0x44444444;
+    constexpr NodeId knownId = 0x11111111;
+    harness.addNodeFixture(knownId, "KNOWN", "Known Node", 100U, MeshtasticView::client, true, false, 0);
+
+    REQUIRE(harness.node(absentId) == nullptr);
+    harness.injectPacketFrom(absentId, 0xffffffff, 0);
+
+    const auto *node = harness.node(absentId);
+    REQUIRE(node != nullptr);
+    CHECK_FALSE(node->hasUser);
+    CHECK(std::string(node->user.long_name) == "Meshtastic 4444");
+    CHECK(std::string(node->user.short_name) == "4444");
+
+    NodeListFilter filter;
+    filter.unknown = true;
+    VisibleNodeIndex filtered;
+    filtered.rebuild(harness.store(), filter, 0);
+    CHECK_FALSE(filtered.contains(absentId));
+    CHECK(filtered.contains(knownId));
+
+    harness.setCurrentTime(2000U);
+    CHECK(harness.nodePurgeCandidate(0x55555555) == absentId);
+}
+
 TEST_CASE("gated virtual node list updates own-node last-heard model while keeping presentation pinned")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     constexpr NodeId ownNode = 0x1a2b3c4d;
     constexpr NodeId remoteNode = 0x22222222;
     harness.setOwnNodeFixture(ownNode);
-    harness.addNodeFixture(ownNode, "OWN", "Own Node", 1699999900U);
+    harness.addNodeFixture(ownNode, "OWN", "Own Node", 1699999800U);
     harness.addNodeFixture(remoteNode, "REM", "Remote Node", 1699999800U);
     harness.showNodesScreen();
 
@@ -994,7 +1146,6 @@ TEST_CASE("gated virtual chat titles never fabricate a distance line for positio
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     constexpr NodeId ownNode = 0x1a2b3c4d;
@@ -1015,7 +1166,6 @@ TEST_CASE("gated virtual node list routes expanded position clicks to map by Nod
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     harness.addNodeFixture(0x11111111, "ONE", "One Node", 1699999900U, MeshtasticView::router, true, false, 1);
@@ -1034,7 +1184,6 @@ TEST_CASE("gated virtual node list keeps own-node coordinates non-clickable like
     constexpr NodeId remoteNode = 0x22222222;
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setOwnNodeFixture(ownNode);
     harness.addNodeFixture(ownNode, "OWN", "Own Node", 1699999900U);
     harness.addNodeFixture(remoteNode, "REM", "Remote Node", 1699999890U);
@@ -1063,18 +1212,18 @@ TEST_CASE("node list reset clears own-node identity for subsequent harness fixtu
     harness.setOwnNodeFixture(previousOwnNode);
 
     harness.resetNodeList();
-    harness.enableVirtualNodeModelFixture();
     harness.addNodeFixture(previousOwnNode, "REM", "Remote After Reset", 1699999900U);
     harness.updateHopsFixture(previousOwnNode, 2);
 
-    CHECK(harness.legacyRowSnapshot(previousOwnNode).signal == "hops: 2");
+    const auto *record = harness.store().find(previousOwnNode);
+    REQUIRE(record != nullptr);
+    CHECK(record->hopsAway == 2);
 }
 
 TEST_CASE("gated virtual node list preserves retained same-second insertion and update recency order")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1000U);
 
     harness.addNodeFixture(0x30000000, "THR", "Third Inserted", 1000U);
@@ -1102,7 +1251,6 @@ TEST_CASE("gated virtual purge selection matches retained equal-timestamp protec
     {
         MuiTestHarness harness;
         harness.resetNodeList();
-        harness.enableVirtualNodeModelFixture();
         harness.setCurrentTime(1000U);
         harness.addUnknownNodeFixture(0x30000000U, 0, 900U, static_cast<uint8_t>(MeshtasticView::unknown), false, false);
         harness.addUnknownNodeFixture(0x10000000U, 0, 900U, static_cast<uint8_t>(MeshtasticView::unknown), false, false);
@@ -1114,7 +1262,6 @@ TEST_CASE("gated virtual purge selection matches retained equal-timestamp protec
 
     MuiTestHarness virtualHarness;
     virtualHarness.resetNodeList();
-    virtualHarness.enableVirtualNodeListFixture();
     virtualHarness.setCurrentTime(1000U);
     virtualHarness.addUnknownNodeFixture(0x30000000U, 0, 900U, static_cast<uint8_t>(MeshtasticView::unknown), false, false);
     virtualHarness.addUnknownNodeFixture(0x10000000U, 0, 900U, static_cast<uint8_t>(MeshtasticView::unknown), false, false);
@@ -1128,7 +1275,6 @@ TEST_CASE("gated virtual node list keeps selection separate from focus across re
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     for (uint32_t i = 1; i <= 30; ++i) {
@@ -1156,7 +1302,6 @@ TEST_CASE("gated virtual node list keeps selection separate from focus across re
     CHECK(virtualRowSnapshot(harness, 25).longName == "Selectable Node");
 
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.addNodeFixture(1, "N01", "Stale Selected Node", 1U);
     harness.showNodesScreen();
     harness.dispatchVirtualNodeEvent(1, LV_EVENT_CLICKED);
@@ -1172,7 +1317,6 @@ TEST_CASE("gated virtual node list group focus traverses past recycled pool boun
     MuiTestHarness harness;
     harness.resetNodeList();
     harness.configureInputDevicesFixture(true, true, false);
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
 
     for (uint32_t i = 1; i <= 30; ++i) {
@@ -1226,7 +1370,6 @@ TEST_CASE("gated virtual node screen assigns configured input devices to the pri
     lv_group_set_default(defaultGroup);
 
     harness.configureInputDevicesFixture(true, true, true);
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
     for (uint32_t i = 1; i <= 10; ++i) {
         char shortName[8]{};
@@ -1259,7 +1402,6 @@ TEST_CASE("gated virtual node list handles keypad and encoder events at logical 
     REQUIRE(defaultGroup != nullptr);
     lv_group_set_default(defaultGroup);
     harness.configureInputDevicesFixture(true, true, false);
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(1700000000U);
     harness.addNodeFixture(1, "ONE", "First Node", 1001U);
     harness.addNodeFixture(2, "TWO", "Last Node", 1002U);
@@ -1304,7 +1446,6 @@ TEST_CASE("gated virtual empty node list returns touchless input to global navig
     REQUIRE(defaultGroup != nullptr);
     lv_group_set_default(defaultGroup);
     harness.configureInputDevicesFixture(true, true, false);
-    harness.enableVirtualNodeListFixture();
 
     harness.showNodesScreen();
 
@@ -1324,7 +1465,6 @@ TEST_CASE("gated virtual node screen adopts its private input group when populat
     REQUIRE(defaultGroup != nullptr);
     lv_group_set_default(defaultGroup);
     harness.configureInputDevicesFixture(true, true, false);
-    harness.enableVirtualNodeListFixture();
 
     harness.showNodesScreen();
     REQUIRE(harness.keyboardInputGroup() == defaultGroup);
@@ -1348,7 +1488,6 @@ TEST_CASE("gated virtual map hides markers created while a name filter is active
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setNodeNameFilter("include");
     constexpr NodeId nodeId = 0x12345678;
     harness.addNodeFixture(nodeId, "MISS", "Excluded Node", 100);
@@ -1364,7 +1503,6 @@ TEST_CASE("gated virtual map applies active filters when it is created after mar
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setNodeNameFilter("include");
     constexpr NodeId nodeId = 0x87654321;
     harness.addNodeFixture(nodeId, "MISS", "Excluded Node", 100);
@@ -1380,7 +1518,6 @@ TEST_CASE("gated virtual map skips filter work for recency-only reorders")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(2000);
 
     constexpr uint32_t nodeCount = 32;
@@ -1407,7 +1544,6 @@ TEST_CASE("gated virtual node list leaves boundary handback on the default group
     REQUIRE(defaultGroup != nullptr);
     lv_group_set_default(defaultGroup);
     harness.configureInputDevicesFixture(true, true, false);
-    harness.enableVirtualNodeListFixture();
     harness.setCurrentTime(2000);
     harness.addNodeFixture(1, "ONE", "First Node", 1001U);
     harness.addNodeFixture(2, "TWO", "Last Node", 1002U);
@@ -1445,7 +1581,6 @@ TEST_CASE("gated virtual node list navigation does not take over the shared defa
     defaultGroupFocusCallbacks = 0;
     defaultGroupEdgeCallbacks = 0;
 
-    harness.enableVirtualNodeListFixture();
     for (uint32_t i = 1; i <= 30; ++i) {
         char shortName[8]{};
         std::snprintf(shortName, sizeof(shortName), "N%02u", i);
@@ -1499,73 +1634,103 @@ TEST_CASE("gated virtual node list navigation does not take over the shared defa
     lv_group_delete(defaultGroup);
 }
 
-TEST_CASE("default node list selection is unchanged by virtual selection handling")
+TEST_CASE("active direct chats protect purge candidates")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
-    harness.setCurrentTime(1700000000U);
+    harness.setCurrentTime(1000U);
 
-    harness.addNodeFixture(0x11111111, "ONE", "One Node", 1699999900U, MeshtasticView::router, true, false, 1);
-    harness.showNodesScreen();
-    harness.selectNode(0x11111111);
-    REQUIRE_FALSE(harness.virtualNodeListEnabled());
-    CHECK(harness.selectedNode() == 0x11111111);
+    harness.addNodeFixture(0x10101010, "KEEP", "Active Chat Node", 1U);
+    harness.addNodeFixture(0x20202020, "DROP", "Purge Candidate", 2U);
+    harness.addActiveChatFixture(0x10101010);
+    harness.addUntilPurgeFixture(249);
 
-    harness.setPositionFilterFixture(true);
-    CHECK(harness.selectedNode() == 0x11111111);
+    CHECK(harness.node(0x10101010) != nullptr);
+    CHECK(harness.node(0x20202020) == nullptr);
+    CHECK(harness.store().size() == 250);
 }
 
-TEST_CASE("active direct chats protect purge candidates in retained and virtual node lists")
+TEST_CASE("cap enforcement terminates when every node is protected")
 {
-    for (bool virtualMode : {false, true}) {
-        CAPTURE(virtualMode);
-        MuiTestHarness harness;
-        harness.resetNodeList();
-        if (virtualMode) {
-            harness.enableVirtualNodeListFixture();
-        } else {
-            harness.enableVirtualNodeModelFixture();
-        }
-        harness.setCurrentTime(1000U);
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(1000U);
 
-        harness.addNodeFixture(0x10101010, "KEEP", "Active Chat Node", 1U);
-        harness.addNodeFixture(0x20202020, "DROP", "Purge Candidate", 2U);
-        harness.addActiveChatFixture(0x10101010);
-        harness.addUntilPurgeFixture(249);
-
-        CHECK(harness.node(0x10101010) != nullptr);
-        CHECK(harness.node(0x20202020) == nullptr);
-        CHECK(harness.store().size() == 250);
+    for (uint32_t i = 0; i < 250; ++i) {
+        const uint32_t id = 0xc0000000U + i;
+        harness.addNodeFixture(id, "KEEP", "Protected Node", 1U + i);
+        harness.addActiveChatFixture(id);
     }
+    harness.addNodeFixture(0xd0000000U, "NEW", "Incoming Node", 2000U);
+
+    CHECK(harness.renderedNodeCount() == 250);
+    CHECK(harness.store().size() == 250);
+    CHECK(harness.node(0xd0000000U) == nullptr);
 }
 
-TEST_CASE("cap enforcement terminates when every retained node is protected")
+TEST_CASE("NodeInfo cannot bypass a full protected node list")
 {
-    for (bool virtualMode : {false, true}) {
-        CAPTURE(virtualMode);
-        MuiTestHarness harness;
-        harness.resetNodeList();
-        harness.setCurrentTime(1000U);
-        if (virtualMode) {
-            harness.enableVirtualNodeListFixture();
-        } else {
-            harness.enableVirtualNodeModelFixture();
-        }
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(1000U);
 
-        for (uint32_t i = 0; i < 250; ++i) {
-            const uint32_t id = 0xc0000000U + i;
-            harness.addNodeFixture(id, "KEEP", "Protected Node", 1U + i);
-            harness.addActiveChatFixture(id);
-        }
-        harness.addNodeFixture(0xd0000000U, "NEW", "Incoming Node", 2000U);
-
-        CHECK(harness.renderedNodeCount() == 250);
-        CHECK(harness.store().size() == 250);
-        CHECK(harness.node(0xd0000000U) == nullptr);
+    for (uint32_t i = 0; i < 250; ++i) {
+        const NodeId id = 0xc1000000U + i;
+        harness.addNodeFixture(id, "KEEP", "Protected Node", 1U + i);
+        harness.addActiveChatFixture(id);
     }
+
+    harness.updateNodeFixture(0xd1000000U, "NEW", "Incoming NodeInfo", static_cast<uint8_t>(MeshtasticView::client), true);
+
+    CHECK(harness.store().size() == 250);
+    CHECK(harness.node(0xd1000000U) == nullptr);
 }
 
-#endif
+TEST_CASE("ten thousand node discovery events keep the model and LVGL heap bounded")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(100000U);
+    meshtastic_User user = meshtastic_User_init_default;
+    std::strncpy(user.short_name, "LOAD", sizeof(user.short_name) - 1);
+    std::strncpy(user.long_name, "Ingress Load", sizeof(user.long_name) - 1);
+    user.role = meshtastic_Config_DeviceConfig_Role_CLIENT;
+    user.public_key.size = 32;
+
+    for (uint32_t i = 0; i < 10000; ++i) {
+        const NodeId id = 0xe0000000U + i;
+        harness.viewForTesting()->addOrUpdateNode(id, 0, 100000U + i, user);
+        if ((i + 1) % 32 == 0) {
+            harness.pump(1);
+            harness.viewForTesting()->task_handler();
+        }
+        CHECK(harness.store().size() <= 250);
+    }
+
+    harness.pump(100);
+    harness.viewForTesting()->task_handler();
+
+    CHECK(harness.store().size() == 250);
+    CHECK(harness.visibleIndex().size() == 250);
+    CHECK(harness.node(0xe0000000U) == nullptr);
+    CHECK(harness.node(0xe000270fU) != nullptr);
+    CHECK(harness.nodeListObjectCount() <= 1 + 9 * 15);
+    CHECK(lv_mem_test() == LV_RESULT_OK);
+}
+
+TEST_CASE("capacity replacement joins the discovery batch")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(1000U);
+    harness.populateNodeFixtures(250);
+
+    const uint32_t bindsBeforeReplacement = harness.virtualNodeListBindGeneration();
+    harness.viewForTesting()->addNode(0xd0000000U, 0, "NEW", "Incoming Node", 1001U, MeshtasticView::client, true, false);
+
+    CHECK(harness.store().size() == 250);
+    CHECK(harness.virtualNodeListBindGeneration() == bindsBeforeReplacement);
+}
 
 #if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH)
 TEST_CASE("hardware node list benchmark seeds fixtures and reports pointer gesture samples")
@@ -1573,11 +1738,7 @@ TEST_CASE("hardware node list benchmark seeds fixtures and reports pointer gestu
     MuiTestHarness harness;
     REQUIRE(harness.ready());
 
-#if defined(DEVICE_UI_MUI_VIRTUAL_NODE_LIST)
     constexpr const char *expectedMode = "\"mode\":\"virtual\"";
-#else
-    constexpr const char *expectedMode = "\"mode\":\"legacy\"";
-#endif
 
     harness.viewForTesting()->startNodeListHardwareBenchmark();
     harness.viewForTesting()->advanceNodeListHardwareBenchmark();

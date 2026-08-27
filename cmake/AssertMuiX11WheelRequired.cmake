@@ -72,7 +72,7 @@ start_xvfb() {
 start_xvfb
 report=\"\${test_dir}/wheel.report\"
 set +e
-DISPLAY=\"\${display_number}\" DEVICE_UI_X11_SUPPRESS_WHEEL_XTEST=1 \"${MUI_NODE_LIST_SIMULATOR}\" --implementation legacy --nodes 40 --seed 42 --run-for-ms 500 --window-title task6-wheel-required --exercise-x11-input --report \"\${report}\"
+DISPLAY=\"\${display_number}\" DEVICE_UI_X11_SUPPRESS_WHEEL_XTEST=1 \"${MUI_NODE_LIST_SIMULATOR}\" --implementation production --nodes 40 --seed 42 --run-for-ms 500 --window-title task6-wheel-required --exercise-x11-input --report \"\${report}\"
 sim_status=\$?
 set -e
 if [ \"\${sim_status}\" -eq 0 ]; then
@@ -81,6 +81,8 @@ if [ \"\${sim_status}\" -eq 0 ]; then
     exit 1
 fi
 test -s \"\${report}\"
+grep -q '^implementation=production$' \"\${report}\"
+grep -q '^virtual_enabled=1$' \"\${report}\"
 grep -q '^wheel_xtest_ok=0$' \"\${report}\"
 grep -q '^wheel_scroll_stable_before=1$' \"\${report}\"
 grep -q '^wheel_observable_changed=0$' \"\${report}\"

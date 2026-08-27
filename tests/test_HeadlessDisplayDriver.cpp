@@ -22,15 +22,16 @@ TEST_CASE("headless display composes inclusive partial RGB565 flushes into a com
 
     CHECK_FALSE(driver.frameCompleteForTesting());
     const auto &beforeFinalFlush = driver.rgbFrameForTesting();
-    CHECK(beforeFinalFlush[(2 * 320 + 1) * 3] > 240);
-    CHECK(beforeFinalFlush[(2 * 320 + 1) * 3 + 1] < 10);
-    CHECK(beforeFinalFlush[(2 * 320 + 1) * 3 + 2] < 10);
-    CHECK(beforeFinalFlush[(3 * 320 + 2) * 3] > 240);
-    CHECK(beforeFinalFlush[(3 * 320 + 2) * 3 + 1] > 240);
-    CHECK(beforeFinalFlush[(3 * 320 + 2) * 3 + 2] > 240);
+    CHECK(beforeFinalFlush[(2 * MUI_TEST_DISPLAY_WIDTH + 1) * 3] > 240);
+    CHECK(beforeFinalFlush[(2 * MUI_TEST_DISPLAY_WIDTH + 1) * 3 + 1] < 10);
+    CHECK(beforeFinalFlush[(2 * MUI_TEST_DISPLAY_WIDTH + 1) * 3 + 2] < 10);
+    CHECK(beforeFinalFlush[(3 * MUI_TEST_DISPLAY_WIDTH + 2) * 3] > 240);
+    CHECK(beforeFinalFlush[(3 * MUI_TEST_DISPLAY_WIDTH + 2) * 3 + 1] > 240);
+    CHECK(beforeFinalFlush[(3 * MUI_TEST_DISPLAY_WIDTH + 2) * 3 + 2] > 240);
 
     const std::array<uint16_t, 1> finalPixel = {0x07e0};
-    const lv_area_t finalArea = {319, 239, 319, 239};
+    const lv_area_t finalArea = {MUI_TEST_DISPLAY_WIDTH - 1, MUI_TEST_DISPLAY_HEIGHT - 1, MUI_TEST_DISPLAY_WIDTH - 1,
+                                 MUI_TEST_DISPLAY_HEIGHT - 1};
     driver.capturePartialFlushForTesting(finalArea, reinterpret_cast<const uint8_t *>(finalPixel.data()), true);
 
     REQUIRE(driver.frameCompleteForTesting());
@@ -38,8 +39,10 @@ TEST_CASE("headless display composes inclusive partial RGB565 flushes into a com
     REQUIRE(driver.writePpmFrameForTesting(ppmPath.string()));
     std::ifstream ppm(ppmPath, std::ios::binary);
     const std::string contents((std::istreambuf_iterator<char>(ppm)), std::istreambuf_iterator<char>());
-    CHECK(contents.rfind("P6\n320 240\n255\n", 0) == 0);
-    CHECK(contents.size() == std::string("P6\n320 240\n255\n").size() + 320 * 240 * 3);
+    const std::string header =
+        "P6\n" + std::to_string(MUI_TEST_DISPLAY_WIDTH) + " " + std::to_string(MUI_TEST_DISPLAY_HEIGHT) + "\n255\n";
+    CHECK(contents.rfind(header, 0) == 0);
+    CHECK(contents.size() == header.size() + MUI_TEST_DISPLAY_WIDTH * MUI_TEST_DISPLAY_HEIGHT * 3);
     std::filesystem::remove(ppmPath);
 }
 #endif
@@ -55,7 +58,7 @@ TEST_CASE("X11 simulator uses shared fixtures and injected pointer input scrolls
     X11MuiSimulator simulator;
     REQUIRE(simulator.initialize());
 
-    simulator.populateLegacyNodeFixtures(40, 42);
+    simulator.populateNodeFixtures(40, 42);
 
     CHECK(simulator.renderedNodeCountForTesting() == 40);
     if (const auto *first = simulator.nodeForTesting(0xa0000000U)) {
@@ -66,11 +69,14 @@ TEST_CASE("X11 simulator uses shared fixtures and injected pointer input scrolls
     }
 
     const auto before = simulator.nodeListScrollYForTesting();
-    REQUIRE(simulator.injectPointer(160, 210, true));
+    const int16_t centerX = static_cast<int16_t>(MUI_TEST_DISPLAY_WIDTH / 2);
+    const int16_t dragStartY = static_cast<int16_t>(MUI_TEST_DISPLAY_HEIGHT * 7 / 8);
+    const int16_t dragEndY = static_cast<int16_t>(MUI_TEST_DISPLAY_HEIGHT / 8);
+    REQUIRE(simulator.injectPointer(centerX, dragStartY, true));
     simulator.pump(50);
-    REQUIRE(simulator.injectPointer(160, 40, true));
+    REQUIRE(simulator.injectPointer(centerX, dragEndY, true));
     simulator.pump(50);
-    REQUIRE(simulator.injectPointer(160, 40, false));
+    REQUIRE(simulator.injectPointer(centerX, dragEndY, false));
     simulator.pump(100);
 
     CHECK(simulator.nodeListScrollYForTesting() != before);

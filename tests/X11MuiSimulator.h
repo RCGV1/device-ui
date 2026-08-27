@@ -14,16 +14,11 @@ class X11Driver;
 class X11MuiSimulator
 {
   public:
-    enum class Implementation {
-        Legacy,
-        VirtualCandidate,
-    };
-
     X11MuiSimulator();
 
-    bool initialize(Implementation implementation = Implementation::Legacy);
+    bool initialize();
     bool ready() const;
-    void populateLegacyNodeFixtures(size_t count = 100, uint32_t seed = 42);
+    void populateNodeFixtures(size_t count = 100, uint32_t seed = 42);
     void pumpUntilClosed();
     void pump(uint32_t elapsedMs = 10);
     bool runNodeListHardwareBenchmark(uint32_t timeoutMs, bool tdeckConstrained, std::string &report);
@@ -36,7 +31,6 @@ class X11MuiSimulator
     bool disableNodeListScrollMomentumForTesting();
     void restoreNodeListScrollMomentumForTesting(bool enabled);
     void stopNodeListScrollForTesting();
-    bool virtualNodeListEnabledForTesting() const;
     uint32_t selectedNodeForTesting() const;
     uintptr_t focusedObjectForTesting() const;
     bool focusedObjectCenterForTesting(int16_t &x, int16_t &y) const;

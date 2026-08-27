@@ -28,7 +28,8 @@ HeadlessDisplayDriver &headlessDisplayDriver()
 } // namespace
 
 MuiTestHarness::MuiTestHarness()
-    : MuiTestHarness(DisplayDriverConfig(DisplayDriverConfig::device_t::NONE, 320, 240), &headlessDisplayDriver())
+    : MuiTestHarness(DisplayDriverConfig(DisplayDriverConfig::device_t::NONE, MUI_TEST_DISPLAY_WIDTH, MUI_TEST_DISPLAY_HEIGHT),
+                     &headlessDisplayDriver())
 {
 }
 #endif
@@ -162,6 +163,7 @@ void MuiTestHarness::addNodeFixture(uint32_t nodeId, const char *shortName, cons
 {
     view->addNode(nodeId, channel, shortName, longName, lastHeard, static_cast<MeshtasticView::eRole>(role), hasKey,
                   unmessagable);
+    view->updateNodesFilteredForTesting(true);
 }
 
 void MuiTestHarness::addUnknownNodeFixture(uint32_t nodeId, uint8_t channel, uint32_t lastHeard, uint8_t role, bool hasKey,
@@ -253,16 +255,6 @@ void MuiTestHarness::toggleResyncPresentationFixture()
     view->notifyResync(false);
 }
 
-void MuiTestHarness::enableVirtualNodeListFixture()
-{
-    view->enableVirtualNodeListForTesting();
-}
-
-void MuiTestHarness::enableVirtualNodeModelFixture()
-{
-    view->enableVirtualNodeModelForTesting();
-}
-
 void MuiTestHarness::configureInputDevicesFixture(bool keyboard, bool encoder, bool pointer)
 {
 #ifdef DEVICE_UI_HEADLESS_TEST
@@ -292,7 +284,7 @@ void MuiTestHarness::addUntilPurgeFixture(size_t count)
     }
 }
 
-std::vector<MuiNodeFixture> MuiTestHarness::makeLegacyNodeFixtures(size_t count, uint32_t seed, size_t iteration) const
+std::vector<MuiNodeFixture> MuiTestHarness::makeNodeFixtures(size_t count, uint32_t seed, size_t iteration) const
 {
     constexpr uint32_t now = 1700000000U;
     std::mt19937 random(seed + static_cast<uint32_t>(iteration * 0x9e3779b9U));
@@ -346,20 +338,17 @@ std::vector<MuiNodeFixture> MuiTestHarness::makeLegacyNodeFixtures(size_t count,
     return fixtures;
 }
 
-void MuiTestHarness::populateLegacyNodeFixtures(size_t count, uint32_t seed, size_t iteration)
+void MuiTestHarness::populateNodeFixtures(size_t count, uint32_t seed, size_t iteration)
 {
-    const bool virtualWasEnabled = virtualNodeListEnabled();
     resetNodeList();
-    if (virtualWasEnabled) {
-        enableVirtualNodeListFixture();
-    }
     setCurrentTime(1700000000U);
 
-    const auto fixtures = makeLegacyNodeFixtures(count, seed, iteration);
+    const auto fixtures = makeNodeFixtures(count, seed, iteration);
     for (const auto &fixture : fixtures) {
-        addNodeFixture(fixture.id, fixture.shortName.c_str(), fixture.longName.c_str(), fixture.lastHeard, fixture.role,
-                       fixture.hasKey, fixture.unmessagable, fixture.channel);
+        view->addNode(fixture.id, fixture.channel, fixture.shortName.c_str(), fixture.longName.c_str(), fixture.lastHeard,
+                      static_cast<MeshtasticView::eRole>(fixture.role), fixture.hasKey, fixture.unmessagable);
     }
+    scanNodeFilters();
     showNodesScreen();
     pump(50);
 }
@@ -394,19 +383,14 @@ size_t MuiTestHarness::renderedNodeCount() const
     return view->nodeCountForTesting();
 }
 
-bool MuiTestHarness::virtualNodeListEnabled() const
+uint16_t MuiTestHarness::nodesOnlineCount() const
 {
-    return view->virtualNodeListEnabledForTesting();
+    return view->nodesOnlineForTesting();
 }
 
 uint32_t MuiTestHarness::virtualNodeListBindGeneration() const
 {
     return view->virtualNodeListBindGenerationForTesting();
-}
-
-size_t MuiTestHarness::legacyRetainedNodeCount() const
-{
-    return view->legacyRetainedNodeCountForTesting();
 }
 
 const char *MuiTestHarness::nodeLongName(uint32_t nodeId) const
@@ -467,21 +451,6 @@ NodePosition MuiTestHarness::nodePosition(uint32_t nodeId) const
 uint32_t MuiTestHarness::nodePurgeCandidate(uint32_t incoming) const
 {
     return view->nodePurgeCandidateForTesting(incoming);
-}
-
-void MuiTestHarness::purgeLegacyNode(uint32_t incoming)
-{
-    view->purgeLegacyNodeForTesting(incoming);
-}
-
-void MuiTestHarness::corruptLegacyNodePanel(uint32_t nodeId)
-{
-    view->corruptLegacyNodePanelForTesting(nodeId);
-}
-
-void MuiTestHarness::removeLegacyNodePanel(uint32_t nodeId)
-{
-    view->removeLegacyNodePanelForTesting(nodeId);
 }
 
 void MuiTestHarness::setLoRaHopLimit(uint8_t hopLimit)
@@ -844,6 +813,16 @@ lv_group_t *MuiTestHarness::pointerInputGroup() const
     return pointer ? lv_indev_get_group(pointer) : nullptr;
 }
 
+void MuiTestHarness::injectPacketFrom(uint32_t from, uint32_t to, uint8_t channel)
+{
+    meshtastic_MeshPacket packet = meshtastic_MeshPacket_init_default;
+    packet.from = from;
+    packet.to = to;
+    packet.channel = channel;
+    view->packetReceived(packet);
+    pump();
+}
+
 void MuiTestHarness::sendActiveText(const char *msg)
 {
     char buf[240]{};
@@ -903,36 +882,9 @@ MuiRowSnapshot snapshotMuiRow(lv_obj_t *row)
     };
 }
 
-MuiRowSnapshot MuiTestHarness::legacyRowSnapshot(uint32_t nodeId) const
-{
-    lv_obj_t *root = view->nodeListRootForTesting();
-    if (!root) {
-        return {};
-    }
-
-    const uint32_t childCount = lv_obj_get_child_count(root);
-    for (uint32_t index = 0; index < childCount; ++index) {
-        lv_obj_t *row = lv_obj_get_child(root, static_cast<int32_t>(index));
-        if (!row || lv_obj_get_child_count(row) < 11) {
-            continue;
-        }
-        lv_obj_t *longName = lv_obj_get_child(row, 2);
-        if (static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(longName))) != nodeId) {
-            continue;
-        }
-        return snapshotMuiRow(row);
-    }
-    return {};
-}
-
 lv_obj_t *MuiTestHarness::nodeListRootForTesting() const
 {
     return view->nodeListRootForTesting();
-}
-
-lv_obj_t *MuiTestHarness::legacyNodeListRootForTesting() const
-{
-    return view->legacyNodeListRootForTesting();
 }
 
 void MuiTestHarness::showNodesScreen()

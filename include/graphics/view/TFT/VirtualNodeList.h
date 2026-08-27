@@ -72,12 +72,20 @@ struct ReusableRow {
     int32_t detailLongitude = 0;
     int32_t detailAltitude = 0;
     meshtastic_EnvironmentMetrics detailEnvironment{};
+    // Short-name label memoization (fallback + distance line)
+    NodeId detailShortId = 0;
+    NodeId detailOwnNode = 0;
+    char detailShortName[5]{};
+    bool detailHasOwnPosition = false;
+    int32_t detailOwnLatitude = 0;
+    int32_t detailOwnLongitude = 0;
 };
 
 class VirtualNodeList
 {
   public:
     static constexpr size_t POOL_SIZE = 7;
+    static constexpr size_t MAX_POOL_SIZE = 9;
     static constexpr int32_t COLLAPSED_ROW_HEIGHT = 53;
     static constexpr int32_t EXPANDED_ROW_HEIGHT = 83;
     static constexpr int32_t ROW_GAP = 5;
@@ -116,7 +124,7 @@ class VirtualNodeList
     uint32_t groupOrderMoveCountForTesting() const { return groupOrderMoveCount; }
 #endif
 
-    void refreshVisibleRows(bool force = false, bool rebind = false);
+    void refreshVisibleRows(bool force = false, bool rebind = false, bool reorder = true);
     bool refreshNode(NodeId id, uint32_t currentTime, const NodeListRenderContext &context);
 
   private:

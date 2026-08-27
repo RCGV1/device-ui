@@ -2,8 +2,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include "HeadlessDisplayDriver.h"
 #include "MuiTestHarness.h"
-#include "graphics/common/MeshtasticView.h"
-#include "graphics/view/TFT/VirtualNodeList.h"
 #include "meshtastic/mesh.pb.h"
 #include <algorithm>
 #include <chrono>
@@ -12,7 +10,6 @@
 #include <doctest/doctest.h>
 #include <filesystem>
 #include <iostream>
-#include <memory>
 #include <random>
 #include <string>
 #include <thread>
@@ -33,14 +30,6 @@ struct NodeFixture {
     uint8_t channel;
 };
 
-class VideoActionSink : public NodeListActionSink
-{
-  public:
-    void nodeClicked(NodeId) override {}
-    void nodeLongPressed(NodeId) override {}
-    void nodeFocused(NodeId) override {}
-};
-
 std::vector<NodeFixture> makeFixtures(size_t count, uint32_t seed)
 {
     std::mt19937 random(seed);
@@ -54,16 +43,6 @@ std::vector<NodeFixture> makeFixtures(size_t count, uint32_t seed)
                             static_cast<uint8_t>(index % 8U)});
     }
     return fixtures;
-}
-
-meshtastic_User makeUser(const NodeFixture &fixture)
-{
-    meshtastic_User user = meshtastic_User_init_default;
-    std::strncpy(user.short_name, fixture.shortName.c_str(), sizeof(user.short_name) - 1);
-    std::strncpy(user.long_name, fixture.longName.c_str(), sizeof(user.long_name) - 1);
-    user.role = static_cast<meshtastic_Config_DeviceConfig_Role>(fixture.role);
-    user.public_key.size = fixture.hasKey ? 1 : 0;
-    return user;
 }
 
 bool writeCaptureFrame(MuiTestHarness &harness, const std::filesystem::path &directory, size_t frame)
@@ -81,7 +60,7 @@ bool writeCaptureFrame(MuiTestHarness &harness, const std::filesystem::path &dir
     return driver->writePpmFrameForTesting((directory / filename).string());
 }
 
-void populateLegacy(MuiTestHarness &harness, const std::vector<NodeFixture> &fixtures)
+void populateProductionList(MuiTestHarness &harness, const std::vector<NodeFixture> &fixtures)
 {
     harness.resetNodeList();
     harness.setCurrentTime(captureTime);
@@ -89,22 +68,7 @@ void populateLegacy(MuiTestHarness &harness, const std::vector<NodeFixture> &fix
         harness.addNodeFixture(fixture.id, fixture.shortName.c_str(), fixture.longName.c_str(), fixture.lastHeard, fixture.role,
                                fixture.hasKey, false, fixture.channel);
     }
-}
-
-std::unique_ptr<VirtualNodeList> populateVirtual(MuiTestHarness &harness, const std::vector<NodeFixture> &fixtures,
-                                                 NodeStore &store, VisibleNodeIndex &visibleIndex, VideoActionSink &sink)
-{
-    harness.resetNodeList();
-    lv_obj_t *parent = harness.nodeListRootForTesting();
-    lv_obj_clean(parent);
-    auto list = std::make_unique<VirtualNodeList>(parent, sink);
-    NodeListFilter filter;
-    for (const auto &fixture : fixtures) {
-        store.upsertUser(fixture.id, fixture.channel, fixture.lastHeard, makeUser(fixture), false);
-    }
-    visibleIndex.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
-    list->sync(store, visibleIndex, 0, captureTime);
-    return list;
+    harness.showNodesScreen();
 }
 
 bool captureVideo(const NodeListVideoOptions &options)
@@ -123,24 +87,13 @@ bool captureVideo(const NodeListVideoOptions &options)
         return false;
     }
     const auto fixtures = makeFixtures(options.nodes, options.seed);
-    NodeStore store;
-    VisibleNodeIndex visibleIndex;
-    VideoActionSink sink;
-    std::unique_ptr<VirtualNodeList> virtualList;
-    if (options.implementation == NodeListVideoImplementation::Legacy) {
-        populateLegacy(harness, fixtures);
-    } else {
-        virtualList = populateVirtual(harness, fixtures, store, visibleIndex, sink);
-    }
-    harness.showNodesScreen();
+    populateProductionList(harness, fixtures);
 
     auto deadline = std::chrono::steady_clock::now();
     for (size_t frame = 0; frame < options.outputFrames; ++frame) {
         const size_t fixtureIndex = (frame * fixtures.size()) / options.outputFrames;
-        if (options.implementation == NodeListVideoImplementation::Legacy) {
-            lv_obj_scroll_to_y(harness.nodeListRootForTesting(), static_cast<int32_t>(fixtureIndex * 48U), LV_ANIM_OFF);
-        } else if (!fixtures.empty()) {
-            virtualList->scrollTo(fixtures[fixtureIndex].id, LV_ANIM_OFF);
+        if (!fixtures.empty()) {
+            harness.scrollVirtualNodeIntoView(fixtures[fixtureIndex].id);
         }
         if (!writeCaptureFrame(harness, directory, frame)) {
             std::cerr << "LVGL did not complete frame " << frame << '\n';
@@ -158,7 +111,7 @@ int main(int argc, char **argv)
     NodeListVideoOptions options{};
     std::string error;
     if (!parseNodeListVideoCommandLine(argc, argv, options, error)) {
-        std::cerr << "usage: node_list_video --implementation legacy|virtual_candidate --nodes 1..250 --seed N "
+        std::cerr << "usage: node_list_video --implementation production --nodes 1..250 --seed N "
                      "--output-frames N --output-dir PATH\n"
                   << error << '\n';
         return 2;

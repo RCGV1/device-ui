@@ -28,12 +28,10 @@ struct NodeListFilter {
     bool metricUnits = true;
 };
 
-enum class NodeListFilterPolicy { LegacyCompatible };
-
 class VisibleNodeIndex
 {
   public:
-    void rebuild(const NodeStore &store, const NodeListFilter &filter, NodeId ownNode, NodeListFilterPolicy policy);
+    void rebuild(const NodeStore &store, const NodeListFilter &filter, NodeId ownNode);
 
     const std::vector<NodeId> &ids() const { return visibleIds; }
     size_t size() const { return visibleIds.size(); }
@@ -54,7 +52,7 @@ class VisibleNodeIndex
     size_t membershipStorageSizeForTesting() const { return visibleMembershipSize; }
 #endif
 
-    static bool isVisible(const NodeRecord &node, const NodeListFilter &filter, NodeId ownNode, NodeListFilterPolicy policy);
+    static bool isVisible(const NodeRecord &node, const NodeListFilter &filter, NodeId ownNode);
 
   private:
     std::vector<NodeId> visibleIds;

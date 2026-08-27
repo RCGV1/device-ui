@@ -122,15 +122,10 @@ struct NodeFixture {
 
 constexpr const char *comparisonScope =
     "Host-relative structural/CPU/allocator/LVGL-heap comparison with C++ new-delimiter counters and peak RSS; "
-    "not hardware timing. The X11 simulator pair is a functional parity smoke only: its cadence includes "
+    "not hardware timing. The X11 simulator is a functional smoke only: its cadence includes "
     "deliberate sleep frames and must never be read as a performance comparison.";
 constexpr size_t allocatorUsedCountSlack = 8;
 constexpr size_t measuredCycleCount = 2;
-
-const char *implementationName(NodeListBenchmarkImplementation implementation)
-{
-    return implementation == NodeListBenchmarkImplementation::VirtualCandidate ? "virtual_candidate" : "legacy";
-}
 
 class BenchmarkActionSink : public NodeListActionSink
 {
@@ -227,38 +222,6 @@ std::vector<NodeFixture> makeFixtures(size_t count, uint32_t seed, size_t iterat
         });
     }
     return fixtures;
-}
-
-void insertFixtures(MuiTestHarness &harness, const std::vector<NodeFixture> &fixtures)
-{
-    for (const auto &fixture : fixtures) {
-        harness.addNodeFixture(fixture.id, fixture.shortName.c_str(), fixture.longName.c_str(), fixture.lastHeard, fixture.role,
-                               fixture.hasKey, fixture.unmessagable, fixture.channel);
-    }
-    harness.pump();
-}
-
-void applyMixedState(MuiTestHarness &harness, const std::vector<NodeFixture> &fixtures)
-{
-    for (size_t i = 0; i < fixtures.size(); ++i) {
-        const auto &fixture = fixtures[i];
-        harness.updateHopsFixture(fixture.id, static_cast<uint8_t>((i % 6) + 1));
-        if (fixture.hasPosition) {
-            harness.updatePositionFixture(fixture.id, 374221234 + static_cast<int32_t>(i), -1220845678 + static_cast<int32_t>(i),
-                                          10 + static_cast<int32_t>(i), 7, 16);
-        }
-        if (fixture.hasTelemetry) {
-            harness.updateTelemetryFixture(fixture.id, 20.0F + static_cast<float>(i % 10), 45.0F, 1013.2F,
-                                           static_cast<uint16_t>(50 + i % 100));
-        }
-        if (i % 5 == 0) {
-            harness.updateMetricsFixture(fixture.id, static_cast<uint32_t>(40 + i % 60), 3.8F, 12.0F, 1.0F);
-        }
-    }
-    if (!fixtures.empty()) {
-        harness.setActiveChatModelFixture(fixtures.front().id);
-    }
-    harness.pump();
 }
 
 meshtastic_User makeUser(const NodeFixture &fixture, const std::string &longName = {})
@@ -543,7 +506,7 @@ bool parseUnsigned(std::string_view value, uint64_t &parsed)
 void printUsage(std::ostream &output)
 {
     output << "usage: node_list_bench --nodes 1|25|100|250 --trials N --seed N "
-              "[--implementation legacy|virtual_candidate] --json PATH\n";
+              "[--implementation production] --json PATH\n";
 }
 #endif
 } // namespace
@@ -551,7 +514,7 @@ void printUsage(std::ostream &output)
 bool parseNodeListBenchmarkCommandLine(int argc, const char *const *argv, NodeListBenchmarkOptions &options,
                                        std::string &jsonPath)
 {
-    options = {0, 0, 0, 1, NodeListBenchmarkImplementation::Legacy};
+    options = {0, 0, 0, 1};
     jsonPath.clear();
     bool sawNodes = false;
     bool sawTrials = false;
@@ -578,9 +541,7 @@ bool parseNodeListBenchmarkCommandLine(int argc, const char *const *argv, NodeLi
                    parsed <= std::numeric_limits<uint32_t>::max()) {
             options.seed = static_cast<uint32_t>(parsed);
             sawSeed = true;
-        } else if (flag == "--implementation" && !sawImplementation && (value == "legacy" || value == "virtual_candidate")) {
-            options.implementation = value == "virtual_candidate" ? NodeListBenchmarkImplementation::VirtualCandidate
-                                                                  : NodeListBenchmarkImplementation::Legacy;
+        } else if (flag == "--implementation" && !sawImplementation && value == "production") {
             sawImplementation = true;
         } else if (flag == "--json" && !sawJson && !value.empty()) {
             jsonPath = std::string(value);
@@ -608,7 +569,7 @@ size_t nodeListBenchmarkRssBytesForTesting(long maxRss, NodeListBenchmarkRssUnit
 
 namespace
 {
-NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOptions &options, NodeListBenchmarkReport report)
+NodeListBenchmarkReport runProductionBenchmark(const NodeListBenchmarkOptions &options, NodeListBenchmarkReport report)
 {
     MuiTestHarness harness;
     report.correctness.ready = harness.ready();
@@ -618,7 +579,7 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
 
     harness.resetNodeList();
     lv_obj_t *container = lv_obj_create(harness.nodeListRootForTesting());
-    lv_obj_set_size(container, 320, 240);
+    lv_obj_set_size(container, MUI_TEST_DISPLAY_WIDTH, MUI_TEST_DISPLAY_HEIGHT);
     BenchmarkActionSink sink;
     auto list = std::make_unique<VirtualNodeList>(container, sink);
     const size_t pooledObjectCount = harness.objectCount();
@@ -660,7 +621,7 @@ NodeListBenchmarkReport runVirtualCandidateBenchmark(const NodeListBenchmarkOpti
         NodeListFilter filter;
 
         auto sync = [&](NodeListCandidateAllocatorTelemetry::Operation *operation = nullptr) {
-            index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+            index.rebuild(store, filter, 0);
             list->sync(store, index, 0, 1700000000U);
             harness.pump();
             objectCountStableOk = objectCountStableOk && harness.objectCount() == pooledObjectCount &&
@@ -891,7 +852,7 @@ NodeListBenchmarkReport runNodeListBenchmark(const NodeListBenchmarkOptions &opt
     NodeListBenchmarkReport report;
     report.source.revision = DEVICE_UI_SOURCE_REVISION;
     report.source.dirty = DEVICE_UI_SOURCE_DIRTY != 0;
-    report.implementation.name = implementationName(options.implementation);
+    report.implementation.name = "production";
     report.implementation.comparisonScope = comparisonScope;
     report.lvgl.version =
         std::to_string(LVGL_VERSION_MAJOR) + "." + std::to_string(LVGL_VERSION_MINOR) + "." + std::to_string(LVGL_VERSION_PATCH);
@@ -934,253 +895,7 @@ NodeListBenchmarkReport runNodeListBenchmark(const NodeListBenchmarkOptions &opt
         return report;
     }
 
-    if (options.implementation == NodeListBenchmarkImplementation::VirtualCandidate) {
-        return runVirtualCandidateBenchmark(options, std::move(report));
-    }
-
-    MuiTestHarness harness;
-    report.correctness.ready = harness.ready();
-    if (!report.correctness.ready) {
-        return report;
-    }
-
-    std::vector<uint64_t> insertSamples;
-    std::vector<uint64_t> updateSamples;
-    std::vector<uint64_t> reorderSamples;
-    std::vector<uint64_t> filterSamples;
-    NodeListScrollTelemetry scrollTelemetry;
-    bool nodeCountOk = true;
-    bool duplicateUpdateOk = true;
-    bool changedNameAndRoleOk = true;
-    bool capPurgeOk = true;
-    bool resyncPresentationOk = true;
-    bool offscreenUpdateOk = true;
-    bool allocatorChurnBoundedOk = true;
-
-    const size_t iterations = options.warmup + options.trials;
-    NodeListCandidateAllocatorTelemetry allocatorTelemetry;
-    allocatorTelemetry.meaning =
-        "LVGL allocator and object snapshots captured around each benchmark operation after the legacy list has reached a "
-        "steady post-population state. Each operation records before, after, delta, peak, total object counts, node-list object "
-        "counts, and booleans derived only from the recorded values. Reorder and purge use causal update/remove/add paths "
-        "instead "
-        "of reset/rebuild shortcuts so recurring retained-object or allocator growth fails the recorded stability checks.";
-    for (size_t iteration = 0; iteration < iterations; ++iteration) {
-        NodeListCandidateAllocatorTelemetry::Trial allocatorTrial;
-        allocatorTrial.iteration = iteration;
-        allocatorTrial.warmup = iteration < options.warmup;
-        auto fixtures = makeFixtures(options.nodes, options.seed, iteration);
-        harness.resetNodeList();
-        harness.enableVirtualNodeModelFixture();
-        harness.setCurrentTime(1700000000U);
-
-        auto ordered = fixtures;
-        std::sort(ordered.begin(), ordered.end(),
-                  [](const NodeFixture &left, const NodeFixture &right) { return left.lastHeard > right.lastHeard; });
-        insertFixtures(harness, ordered);
-        harness.showNodesScreen();
-        harness.pump(50);
-        applyMixedState(harness, fixtures);
-        harness.pump(500);
-        allocatorTrial.before = captureAllocatorSnapshot();
-        allocatorTrial.peak = allocatorTrial.before;
-        captureTerminalBefore(allocatorTrial, harness, harness.legacyRetainedNodeCount(), harness.store().size(),
-                              harness.renderedNodeCount());
-
-        uint64_t insertNs = 0;
-        uint64_t updateNs = 0;
-        uint64_t reorderNs = 0;
-        uint64_t filterNs = 0;
-        NodeListScrollTelemetry trialScrollTelemetry;
-        trialScrollTelemetry.rowsPerCycle = fixtures.size();
-        for (size_t cycle = 0; cycle < measuredCycleCount; ++cycle) {
-            allocatorTrial.cycleCount++;
-            auto orderedCycle = fixtures;
-            std::sort(orderedCycle.begin(), orderedCycle.end(),
-                      [](const NodeFixture &left, const NodeFixture &right) { return left.lastHeard > right.lastHeard; });
-            insertNs += recordOperation(allocatorTrial, harness, "insert", [&](auto &) {
-                for (const auto &fixture : orderedCycle) {
-                    harness.updateNodeFixture(fixture.id, fixture.shortName.c_str(), fixture.longName.c_str(), fixture.role,
-                                              fixture.hasKey, fixture.unmessagable, fixture.channel);
-                }
-                harness.pump();
-            });
-
-            updateNs += recordOperation(allocatorTrial, harness, "update", [&](auto &) {
-                for (size_t i = 0; i < fixtures.size(); ++i) {
-                    auto &fixture = fixtures[i];
-                    const std::string longName = "Updated Node " + std::to_string(cycle) + "-" + std::to_string(i);
-                    fixture.longName = longName;
-                    fixture.role = static_cast<uint8_t>((fixture.role + 1) % 7);
-                    harness.updateNodeFixture(fixture.id, fixture.shortName.c_str(), fixture.longName.c_str(), fixture.role,
-                                              fixture.hasKey, fixture.unmessagable, fixture.channel);
-                }
-                auto &changed = fixtures.front();
-                changed.shortName = "DUP2";
-                changed.longName = "Duplicate Final";
-                changed.role = static_cast<uint8_t>(MeshtasticView::router);
-                changed.hasKey = true;
-                changed.unmessagable = false;
-                harness.updateNodeFixture(changed.id, "DUP1", "Duplicate First", static_cast<uint8_t>(MeshtasticView::client),
-                                          true, false, changed.channel);
-                harness.updateNodeFixture(changed.id, changed.shortName.c_str(), changed.longName.c_str(), changed.role,
-                                          changed.hasKey, changed.unmessagable, changed.channel);
-                harness.pump();
-            });
-
-            const auto &changed = fixtures.front();
-            if (fixtures.size() > 1) {
-                auto &offscreen = fixtures.back();
-                recordOperation(allocatorTrial, harness, "rebind", [&](auto &) {
-                    harness.updateNodeFixture(offscreen.id, "OFFS", "Offscreen Updated", offscreen.role, offscreen.hasKey,
-                                              offscreen.unmessagable, offscreen.channel);
-                    harness.pump();
-                });
-                offscreen.shortName = "OFFS";
-                offscreen.longName = "Offscreen Updated";
-                const char *offscreenName = harness.nodeLongName(offscreen.id);
-                offscreenUpdateOk = offscreenUpdateOk && offscreenName && std::strcmp(offscreenName, "Offscreen Updated") == 0;
-                const auto offscreenSnapshot = harness.legacyRowSnapshot(offscreen.id);
-                offscreenUpdateOk = offscreenUpdateOk && offscreenSnapshot.longName == "Offscreen Updated";
-            } else {
-                recordOperation(allocatorTrial, harness, "rebind", [&](auto &) { harness.pump(); });
-            }
-
-            const char *changedName = harness.nodeLongName(changed.id);
-            duplicateUpdateOk = duplicateUpdateOk && changedName && std::strcmp(changedName, "Duplicate Final") == 0;
-            changedNameAndRoleOk = changedNameAndRoleOk && changedName && std::strcmp(changedName, "Duplicate Final") == 0 &&
-                                   harness.nodeRole(changed.id) == static_cast<uint8_t>(MeshtasticView::router);
-
-            filterNs += recordOperation(allocatorTrial, harness, "filter", [&](auto &) { harness.scanNodeFilters(); });
-
-            std::mt19937 orderRandom(options.seed ^ static_cast<uint32_t>((iteration + 1) * (cycle + 1)));
-            std::shuffle(fixtures.begin(), fixtures.end(), orderRandom);
-            reorderNs += recordOperation(allocatorTrial, harness, "reorder", [&](auto &) {
-                for (const auto &fixture : fixtures) {
-                    harness.updateLastHeardFixture(fixture.id);
-                    harness.pump();
-                }
-            });
-
-            recordOperation(allocatorTrial, harness, "scroll", [&](auto &) {
-                lv_obj_scroll_to_y(harness.legacyNodeListRootForTesting(), 120, LV_ANIM_OFF);
-                harness.pump();
-            });
-            trialScrollTelemetry.cycles++;
-            for (size_t sample = 0; sample < fixtures.size(); ++sample) {
-                const size_t fixtureIndex = cycle % 2 == 0 ? sample : fixtures.size() - 1 - sample;
-                recordScrollFrame(trialScrollTelemetry, [&] {
-                    lv_obj_scroll_to_y(harness.legacyNodeListRootForTesting(), static_cast<int32_t>(fixtureIndex * 48U),
-                                       LV_ANIM_OFF);
-                    harness.pump();
-                });
-            }
-
-            recordOperation(allocatorTrial, harness, "presentation_resync",
-                            [&](auto &) { harness.toggleResyncPresentationFixture(); });
-            resyncPresentationOk = resyncPresentationOk && harness.legacyRetainedNodeCount() == options.nodes;
-
-            NodeFixture extra{0xb0000000U + static_cast<uint32_t>(iteration * measuredCycleCount + cycle),
-                              "CAP1",
-                              "Cap Purge Probe",
-                              1699999999U,
-                              static_cast<uint8_t>(MeshtasticView::client),
-                              true,
-                              false,
-                              0,
-                              false,
-                              false};
-            recordOperation(allocatorTrial, harness, "purge", [&](auto &) {
-                const uint32_t purgeId = harness.nodePurgeCandidate(extra.id);
-                capPurgeOk = capPurgeOk && purgeId != 0;
-                if (purgeId != 0) {
-                    auto purgedFixture = std::find_if(fixtures.begin(), fixtures.end(),
-                                                      [&](const auto &fixture) { return fixture.id == purgeId; });
-                    if (purgedFixture != fixtures.end()) {
-                        extra.hasPosition = purgedFixture->hasPosition;
-                        extra.hasTelemetry = purgedFixture->hasTelemetry;
-                    }
-                    if (options.nodes < 250) {
-                        harness.purgeLegacyNode(extra.id);
-                    }
-                    harness.addNodeFixture(extra.id, extra.shortName.c_str(), extra.longName.c_str(), extra.lastHeard, extra.role,
-                                           extra.hasKey, extra.unmessagable, extra.channel);
-                    harness.updateHopsFixture(extra.id, 1);
-                    if (extra.hasPosition) {
-                        harness.updatePositionFixture(extra.id, 374221234, -1220845678, 10, 7, 16);
-                    }
-                    if (extra.hasTelemetry) {
-                        harness.updateTelemetryFixture(extra.id, 20.0F, 45.0F, 1013.2F, 50);
-                    }
-                    harness.pump();
-                    if (purgedFixture != fixtures.end()) {
-                        *purgedFixture = extra;
-                    }
-                    capPurgeOk =
-                        capPurgeOk && harness.nodeLongName(extra.id) != nullptr && harness.nodeLongName(purgeId) == nullptr;
-                }
-            });
-        }
-        nodeCountOk = nodeCountOk && harness.legacyRetainedNodeCount() == options.nodes &&
-                      harness.store().size() == options.nodes && harness.renderedNodeCount() == options.nodes;
-        allocatorTrial.after = captureAllocatorSnapshot();
-        allocatorTrial.delta = allocatorDelta(allocatorTrial.before, allocatorTrial.after);
-        observeAllocatorSnapshot(allocatorTrial.peak, allocatorTrial.after);
-        captureTerminalAfter(allocatorTrial, harness, harness.legacyRetainedNodeCount(), harness.store().size(),
-                             harness.renderedNodeCount());
-        if (!allocatorTrial.warmup) {
-            allocatorChurnBoundedOk =
-                allocatorChurnBoundedOk && trialTerminalIsStable(allocatorTrial) && trialOperationsAreStable(allocatorTrial);
-        }
-        allocatorTelemetry.trials.push_back(std::move(allocatorTrial));
-
-        if (iteration >= options.warmup) {
-            insertSamples.push_back(insertNs);
-            updateSamples.push_back(updateNs);
-            reorderSamples.push_back(reorderNs);
-            filterSamples.push_back(filterNs);
-            mergeScrollTelemetry(scrollTelemetry, trialScrollTelemetry);
-        }
-    }
-
-    report.timing.insertNs = summarize(std::move(insertSamples));
-    report.timing.updateNs = summarize(std::move(updateSamples));
-    report.timing.reorderInsertNs = summarize(std::move(reorderSamples));
-    report.timing.filterNs = summarize(std::move(filterSamples));
-    finalizeScrollTelemetry(scrollTelemetry);
-    report.scrollTelemetry = scrollTelemetry;
-    report.allocatorTelemetry = std::move(allocatorTelemetry);
-    report.lvgl.totalObjects = harness.objectCount();
-    report.lvgl.nodeListObjects = harness.nodeListObjectCount();
-
-    lv_mem_monitor_t memory{};
-    lv_mem_monitor(&memory);
-    report.heap.maxRssBytes = currentMaxRssBytes();
-#ifdef NODE_LIST_BENCH_EXECUTABLE
-    report.heap.newCount = heapAccounting().count.load();
-    report.heap.newBytes = heapAccounting().bytes.load();
-#endif
-    report.memory.totalSize = memory.total_size;
-    report.memory.freeCount = memory.free_cnt;
-    report.memory.freeSize = memory.free_size;
-    report.memory.biggestFreeBlock = memory.free_biggest_size;
-    report.memory.usedCount = memory.used_cnt;
-    report.memory.maxUsed = memory.max_used;
-    report.memory.usedPercent = memory.used_pct;
-    report.memory.fragmentationPercent = memory.frag_pct;
-    report.memory.integrityOk = lv_mem_test() == LV_RESULT_OK;
-
-    report.correctness.requestedNodeCount = nodeCountOk;
-    report.correctness.duplicateUpdate = duplicateUpdateOk;
-    report.correctness.changedNameAndRole = changedNameAndRoleOk;
-    report.correctness.capPurge = capPurgeOk;
-    report.correctness.resyncPresentationPreservedNodes = resyncPresentationOk;
-    report.correctness.offscreenUpdate = offscreenUpdateOk;
-    report.correctness.all = report.correctness.ready && report.correctness.requestedNodeCount &&
-                             report.correctness.duplicateUpdate && report.correctness.changedNameAndRole &&
-                             report.correctness.capPurge && report.correctness.resyncPresentationPreservedNodes &&
-                             report.correctness.offscreenUpdate && allocatorChurnBoundedOk && report.memory.integrityOk;
-    return report;
+    return runProductionBenchmark(options, std::move(report));
 }
 
 bool writeNodeListBenchmarkJson(const NodeListBenchmarkReport &report, const std::string &path, std::string &error)

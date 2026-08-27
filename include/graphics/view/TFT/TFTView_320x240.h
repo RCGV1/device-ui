@@ -1,11 +1,10 @@
 #pragma once
 
 #include "graphics/common/MeshtasticView.h"
+#include "graphics/common/NodeDiscoverySyncGate.h"
 #include "graphics/common/NodeStore.h"
 #include "graphics/common/VisibleNodeIndex.h"
-#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
 #include "graphics/view/TFT/VirtualNodeList.h"
-#endif
 #include "meshtastic/clientonly.pb.h"
 #include <array>
 #include <memory>
@@ -20,11 +19,7 @@ class MapPanel;
  * Note: due to static callbacks in lvgl this class is modelled as
  *       a singleton with static callback members
  */
-#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
 class TFTView_320x240 : public MeshtasticView, private NodeListActionSink
-#else
-class TFTView_320x240 : public MeshtasticView
-#endif
 {
   public:
     void init(IClientBase *client) override;
@@ -44,9 +39,10 @@ class TFTView_320x240 : public MeshtasticView
     void updateMetrics(uint32_t nodeNum, uint32_t bat_level, float voltage, float chUtil, float airUtil) override;
     void updateEnvironmentMetrics(uint32_t nodeNum, const meshtastic_EnvironmentMetrics &metrics) override;
     void updateAirQualityMetrics(uint32_t nodeNum, const meshtastic_AirQualityMetrics &metrics) override;
-    void updatePowerMetrics(uint32_t nodeNum, const meshtastic_PowerMetrics &metrics) override;
     void updateSignalStrength(uint32_t nodeNum, int32_t rssi, float snr) override;
     void updateHopsAway(uint32_t nodeNum, uint8_t hopsAway) override;
+    void beginNodeListPresentationBatch() override;
+    void endNodeListPresentationBatch() override;
     void updateConnectionStatus(const meshtastic_DeviceConnectionStatus &status) override;
 
     // methods to update device config
@@ -99,6 +95,7 @@ class TFTView_320x240 : public MeshtasticView
     void newMessage(uint32_t from, uint32_t to, uint8_t ch, const char *msg, uint32_t &msgtime, bool restore = true) override;
     void restoreMessage(const LogMessage &msg) override;
     void removeNode(uint32_t nodeNum) override;
+    bool hasKnownNodeForPacket(uint32_t nodeNum) const override;
 
     const NodeRecord *nodeRecord(NodeId id) const { return nodeStore.find(id); }
     const NodeStore &getNodeStore(void) const { return nodeStore; }
@@ -110,14 +107,13 @@ class TFTView_320x240 : public MeshtasticView
     bool nodeListHardwareBenchmarkComplete() const;
     const char *nodeListHardwareBenchmarkReport() const;
 #endif
-#if defined(DEVICE_UI_MUI_VIRTUAL_NODE_LIST) && defined(DEVICE_UI_MUI_NODE_LIST_DEMO_FIXTURES)
+#if defined(DEVICE_UI_MUI_NODE_LIST_DEMO_FIXTURES)
     void startNodeListDemoFixtures();
 #endif
 
 #ifdef UNIT_TEST
     std::array<char, 4> nodeShortNameCacheForTesting(NodeId id) const;
     lv_obj_t *nodeListRootForTesting(void) const;
-    lv_obj_t *legacyNodeListRootForTesting(void) const;
     void showNodesScreenForTesting(void);
     void resetNodeListForTesting(void);
     void updateNodesFilteredForTesting(bool reset);
@@ -125,6 +121,7 @@ class TFTView_320x240 : public MeshtasticView
     void updateAllLastHeardForTesting(void) { updateAllLastHeard(); }
     void setCurrentTimeForTesting(time_t value);
     size_t nodeCountForTesting(void) const;
+    uint16_t nodesOnlineForTesting(void) const { return nodesOnline; }
     const char *nodeLongNameForTesting(uint32_t nodeNum) const;
     uint8_t nodeRoleForTesting(uint32_t nodeNum) const;
     const NodeRecord *nodeRecordForTesting(uint32_t nodeNum) const { return nodeRecord(nodeNum); }
@@ -138,9 +135,6 @@ class TFTView_320x240 : public MeshtasticView
     const char *nodeShortNameForTesting(NodeId id) const;
     NodePosition nodePositionForTesting(NodeId id) const;
     NodeId nodePurgeCandidateForTesting(NodeId incoming) const;
-    void purgeLegacyNodeForTesting(NodeId incoming);
-    void corruptLegacyNodePanelForTesting(NodeId id);
-    void removeLegacyNodePanelForTesting(NodeId id);
     void setControllerForTesting(ViewController *controller);
     void setLoRaHopLimitForTesting(uint8_t hopLimit);
     void selectNodeForTesting(NodeId id);
@@ -184,14 +178,10 @@ class TFTView_320x240 : public MeshtasticView
     void focusVirtualNodeForTesting(NodeId id);
     void scrollVirtualNodeForTesting(NodeId id);
     lv_group_t *virtualNodeListNavigationGroupForTesting() const;
-    void enableVirtualNodeListForTesting();
-    void enableVirtualNodeModelForTesting();
     void setActiveChatForTesting(NodeId id, bool active);
     void setOfflineFilterForTesting(bool enabled);
     void setPositionFilterForTesting(bool enabled);
-    bool virtualNodeListEnabledForTesting() const;
     uint32_t virtualNodeListBindGenerationForTesting() const;
-    size_t legacyRetainedNodeCountForTesting() const;
 #endif
 
     enum BasicSettings {
@@ -272,8 +262,6 @@ class TFTView_320x240 : public MeshtasticView
     virtual void newMessage(uint32_t nodeNum, lv_obj_t *container, uint8_t channel, const char *msg);
     // create empty message container for node or group channel
     virtual lv_obj_t *newMessageContainer(uint32_t from, uint32_t to, uint8_t ch);
-    // filter or highlight node
-    virtual bool applyNodesFilter(uint32_t nodeNum, bool reset = false);
     // display message alert popup
     virtual void messageAlert(const char *alert, bool show);
     // mark sent message as received
@@ -281,7 +269,7 @@ class TFTView_320x240 : public MeshtasticView
     // set node image based on role
     virtual void setNodeImage(uint32_t nodeNum, eRole role, bool unmessagable, lv_obj_t *img);
     // apply filter and count number of filtered nodes
-    virtual void updateNodesFiltered(bool reset);
+    virtual void updateNodesFiltered(bool reset, bool forceRebind = false);
     // set last heard to now, update nodes online
     virtual void updateLastHeard(uint32_t nodeNum);
     // update last heard value on all node panels
@@ -307,7 +295,6 @@ class TFTView_320x240 : public MeshtasticView
     // update time display on home screen
     virtual void updateFreeMem(void);
     // update distance to other node
-    virtual void updateDistance(uint32_t nodeNum, int32_t lat, int32_t lon);
     // show map and load tiles
     virtual void loadMap(void);
     // add objects on map
@@ -343,18 +330,14 @@ class TFTView_320x240 : public MeshtasticView
     void setInputGroup(lv_group_t *group);
     void setInputButtonLabel(void);
     NodeListFilter currentNodeListFilter(void) const;
-#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
     NodeListRenderContext nodeListRenderContext(void) const;
     void publishMapFilter();
     void reconcileVirtualNodeListInputGroup(bool enteringNodeScreen);
-#endif
     bool chatTitleFromModel(uint32_t nodeNum, char *buf, size_t bufSize) const;
     void syncVisibleNodeIndex(void);
     void syncNodeListPresentation(void);
     void syncNodeListPresentation(bool forceRebind);
     void syncNodeListPresentation(const NodeMutation &mutation);
-    bool shouldMaintainNodeModel(void) const;
-#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
     void ensureVirtualNodeList(void);
     bool mutationCanRefreshVirtualRow(const NodeMutation &mutation) const;
     bool refreshVirtualNodePresentation(NodeId id);
@@ -363,7 +346,6 @@ class TFTView_320x240 : public MeshtasticView
     void nodeFocused(NodeId id) override;
     void nodeFocusBoundary(bool forward) override;
     void nodePositionClicked(NodeId id) override;
-#endif
 #if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH)
     enum class NodeListHardwareBenchmarkState : uint8_t { Idle, ReplaySettle, SeedPending, Warmup, MeasureForward, Report, Done };
 
@@ -422,8 +404,7 @@ class TFTView_320x240 : public MeshtasticView
     void publishNodeListHardwareBenchmarkProgress();
     void finishNodeListHardwareBenchmarkReport();
 #endif
-#if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH) ||                                                                                 \
-    (defined(DEVICE_UI_MUI_VIRTUAL_NODE_LIST) && defined(DEVICE_UI_MUI_NODE_LIST_DEMO_FIXTURES))
+#if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH) || defined(DEVICE_UI_MUI_NODE_LIST_DEMO_FIXTURES)
     void clearNodeListHardwareBenchmarkPresentation();
     void seedNodeListHardwareBenchmarkFixtures();
 #endif
@@ -443,7 +424,6 @@ class TFTView_320x240 : public MeshtasticView
     void updateStatistics(const meshtastic_MeshPacket &p);
     void updateSignalStrength(int32_t rssi, float snr);
     int32_t signalStrength2Percent(int32_t rx_rssi, float rx_snr);
-    lv_obj_t *nodePanel(NodeId id) const;
     void selectNode(NodeId id);
     bool nodeIsMessagable(NodeId id) const;
     uint8_t nodeChannel(NodeId id) const;
@@ -601,7 +581,6 @@ class TFTView_320x240 : public MeshtasticView
     static void ui_event_positionButton(lv_event_t *e);
 
     // animations
-    static void ui_anim_node_panel_cb(void *var, int32_t v);
     static void ui_anim_radar_cb(void *var, int32_t r);
 
     lv_obj_t *activeButton = nullptr;
@@ -614,10 +593,15 @@ class TFTView_320x240 : public MeshtasticView
 
     enum BasicSettings activeSettings = eNone; // active settings menu (used to disable other button presses)
 
-    static TFTView_320x240 *gui;                          // singleton pattern
-    bool screensInitialised;                              // true if init_screens is completed
-    uint32_t nodesFiltered;                               // no. hidden nodes in node list
-    bool nodesChanged;                                    // true if nodes changed (added or purged)
+    static TFTView_320x240 *gui; // singleton pattern
+    bool screensInitialised;     // true if init_screens is completed
+    uint32_t nodesFiltered;      // no. hidden nodes in node list
+    bool nodesChanged;           // true if nodes changed (added or purged)
+    NodeDiscoverySyncGate nodeListDiscoverySync;
+    uint8_t nodeListPresentationBatchDepth = 0;
+    bool nodeListPresentationBatchSyncRequested = false;
+    bool nodeListPresentationBatchForceRebind = false;
+    NodeId nodeListPresentationBatchRefreshId = 0;
     bool processingFilter;                                // indicates that filtering is ongoing
     bool packetLogEnabled;                                // display received packets
     bool detectorRunning;                                 // meshDetector is active
@@ -630,11 +614,9 @@ class TFTView_320x240 : public MeshtasticView
     time_t actTime, uptime, lastHeard;                    // actual time and uptime; time last heard a node
     bool hasPosition;                                     // if our position is known
     int32_t myLatitude, myLongitude;                      // our current position as reported by firmware
-    void *topNodeLL;                                      // pointer to topmost button in group ll
     uint32_t scans;                                       // scanner counter
     lv_anim_t radar;                                      // radar animation
     static uint32_t currentNode;                          // current selected node
-    static lv_obj_t *currentPanel;                        // current selected node panel
     static lv_obj_t *spinnerButton;                       // start button animation
     static time_t startTime;                              // time when start button was pressed
     static uint32_t pinKeys;                              // number of keys pressed (lock screen)
@@ -665,16 +647,11 @@ class TFTView_320x240 : public MeshtasticView
     meshtastic_DeviceProfile_full db{}; // full copy of the node's configuration db (except nodeinfos) plus ui data
     NodeStore nodeStore;
     VisibleNodeIndex visibleNodes;
-    bool nodeModelEnabled = false;
-#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
-    lv_obj_t *virtualNodeListHost = nullptr;
     std::unique_ptr<VirtualNodeList> virtualNodeList;
-    bool useVirtualNodeList = false;
     uint32_t publishedMapFilterGeneration = 0;
     bool mapFilterPublicationValid = false;
     bool virtualNodeListInputVisibilityKnown = false;
     bool virtualNodeListInputHadVisibleNodes = false;
-#endif
 #if defined(DEVICE_UI_MUI_NODE_LIST_HW_BENCH)
     static constexpr size_t nodeListHardwareBenchmarkFixtureCount = 250;
     static constexpr size_t nodeListHardwareBenchmarkWarmupGestures = 3;
@@ -706,7 +683,7 @@ class TFTView_320x240 : public MeshtasticView
     NodeListHardwareBenchmarkMemory nodeListHardwareBenchmarkMemoryAfter{};
     std::string nodeListHardwareBenchmarkReportLine;
 #endif
-#if defined(DEVICE_UI_MUI_VIRTUAL_NODE_LIST) && defined(DEVICE_UI_MUI_NODE_LIST_DEMO_FIXTURES)
+#if defined(DEVICE_UI_MUI_NODE_LIST_DEMO_FIXTURES)
     bool nodeListDemoFixturesStarted = false;
 #endif
 };

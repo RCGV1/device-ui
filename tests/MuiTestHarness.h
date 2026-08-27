@@ -107,22 +107,19 @@ class MuiTestHarness
     void addActiveChatFixture(uint32_t nodeId, uint8_t channel = 0);
     void setActiveChatModelFixture(uint32_t nodeId, bool active = true);
     void toggleResyncPresentationFixture();
-    void enableVirtualNodeListFixture();
-    void enableVirtualNodeModelFixture();
     void configureInputDevicesFixture(bool keyboard, bool encoder, bool pointer);
     void setOfflineFilterFixture(bool enabled);
     void setPositionFilterFixture(bool enabled);
     void addUntilPurgeFixture(size_t count);
-    std::vector<MuiNodeFixture> makeLegacyNodeFixtures(size_t count = 100, uint32_t seed = 42, size_t iteration = 0) const;
-    void populateLegacyNodeFixtures(size_t count = 100, uint32_t seed = 42, size_t iteration = 0);
+    std::vector<MuiNodeFixture> makeNodeFixtures(size_t count = 100, uint32_t seed = 42, size_t iteration = 0) const;
+    void populateNodeFixtures(size_t count = 100, uint32_t seed = 42, size_t iteration = 0);
     void scanNodeFilters();
     void pump(uint32_t elapsedMs = 10);
     size_t objectCount() const;
     size_t nodeListObjectCount() const;
     size_t renderedNodeCount() const;
-    bool virtualNodeListEnabled() const;
+    uint16_t nodesOnlineCount() const;
     uint32_t virtualNodeListBindGeneration() const;
-    size_t legacyRetainedNodeCount() const;
     const char *nodeLongName(uint32_t nodeId) const;
     uint8_t nodeRole(uint32_t nodeId) const;
     const NodeRecord *node(uint32_t nodeId) const;
@@ -135,9 +132,6 @@ class MuiTestHarness
     std::array<char, 4> nodeShortNameCache(uint32_t nodeId) const;
     NodePosition nodePosition(uint32_t nodeId) const;
     uint32_t nodePurgeCandidate(uint32_t incoming) const;
-    void purgeLegacyNode(uint32_t incoming);
-    void corruptLegacyNodePanel(uint32_t nodeId);
-    void removeLegacyNodePanel(uint32_t nodeId);
     void setLoRaHopLimit(uint8_t hopLimit);
     void selectNode(uint32_t nodeId);
     void scanSignal(uint32_t scanNo = 0);
@@ -195,11 +189,10 @@ class MuiTestHarness
     lv_group_t *keyboardInputGroup() const;
     lv_group_t *encoderInputGroup() const;
     lv_group_t *pointerInputGroup() const;
+    void injectPacketFrom(uint32_t from, uint32_t to = 0xffffffff, uint8_t channel = 0);
     void sendActiveText(const char *msg);
     const NodeStore &store() const;
     const VisibleNodeIndex &visibleIndex() const;
-    MuiRowSnapshot legacyRowSnapshot(uint32_t nodeId) const;
-    lv_obj_t *legacyNodeListRootForTesting() const;
     lv_obj_t *nodeListRootForTesting() const;
     TFTView_320x240 *viewForTesting() const { return view; }
     void showNodesScreen();

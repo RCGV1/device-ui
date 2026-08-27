@@ -30,9 +30,7 @@ bool parseNodeListVideoCommandLine(int argc, const char *const *argv, NodeListVi
         const std::string_view flag(argv[index]);
         const std::string_view value(argv[index + 1]);
         uint64_t parsed = 0;
-        if (flag == "--implementation" && !sawImplementation && (value == "legacy" || value == "virtual_candidate")) {
-            options.implementation =
-                value == "legacy" ? NodeListVideoImplementation::Legacy : NodeListVideoImplementation::VirtualCandidate;
+        if (flag == "--implementation" && !sawImplementation && value == "production") {
             sawImplementation = true;
         } else if (flag == "--nodes" && !sawNodes && parseUnsigned(value, parsed) && parsed > 0 && parsed <= 250) {
             options.nodes = static_cast<size_t>(parsed);

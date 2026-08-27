@@ -1,13 +1,30 @@
+#include "graphics/common/MeshtasticView.h"
 #include "graphics/common/NodeStore.h"
 
 #include <doctest/doctest.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
+#include <new>
 
 namespace
 {
 constexpr auto unknownRole = static_cast<meshtastic_Config_DeviceConfig_Role>(15);
+thread_local bool countAllocations = false;
+thread_local size_t allocationCount = 0;
+
+struct ScopedAllocationCounter {
+    ScopedAllocationCounter()
+    {
+        allocationCount = 0;
+        countAllocations = true;
+    }
+
+    ~ScopedAllocationCounter() { countAllocations = false; }
+
+    size_t count() const { return allocationCount; }
+};
 
 meshtastic_User makeUser(const char *shortName, const char *longName,
                          meshtastic_Config_DeviceConfig_Role role = meshtastic_Config_DeviceConfig_Role_CLIENT)
@@ -19,6 +36,28 @@ meshtastic_User makeUser(const char *shortName, const char *longName,
     return user;
 }
 } // namespace
+
+void *operator new(std::size_t size)
+{
+    if (countAllocations) {
+        ++allocationCount;
+    }
+    void *ptr = std::malloc(size ? size : 1);
+    if (!ptr) {
+        throw std::bad_alloc();
+    }
+    return ptr;
+}
+
+void operator delete(void *ptr) noexcept
+{
+    std::free(ptr);
+}
+
+void operator delete(void *ptr, std::size_t) noexcept
+{
+    std::free(ptr);
+}
 
 TEST_CASE("node store retains typed user fields without LVGL")
 {
@@ -333,6 +372,67 @@ TEST_CASE("node store purge candidate limits stale-unknown preference to the old
     CHECK(store.selectPurgeCandidate(0x60000000, 0, now) == 0x10000000);
 }
 
+TEST_CASE("node store purge candidate includes the stale unknown at the preferred-population boundary")
+{
+    constexpr uint32_t now = 10000;
+    NodeStore store;
+
+    for (uint32_t i = 0; i < 7; ++i) {
+        store.upsertUser(0x10000000U + i, 0, 100U + i, makeUser("OLD", "Old Named"), false);
+    }
+    store.upsertUnknown(0x20000000U, 0, 107U, static_cast<uint8_t>(unknownRole), false, false);
+    store.upsertUser(0x30000000U, 0, 108U, makeUser("NEW", "New Named"), false);
+    store.upsertUser(0x40000000U, 0, 109U, makeUser("NEW", "Newest Named"), false);
+
+    CHECK(store.selectPurgeCandidate(0x50000000U, 0, now) == 0x20000000U);
+}
+
+TEST_CASE("node store purge candidate selection does not allocate at the 250-node limit")
+{
+    constexpr uint32_t now = 10000;
+    constexpr NodeId expected = 0x10000000U;
+    NodeStore store;
+
+    for (uint32_t i = 0; i < 250; ++i) {
+        store.upsertUnknown(expected + i, 0, 1000U + i, static_cast<uint8_t>(unknownRole), false, false);
+    }
+
+    NodeId candidate = 0;
+    size_t allocations = 0;
+    {
+        ScopedAllocationCounter counter;
+        candidate = store.selectPurgeCandidate(0x20000000U, 0, now);
+        allocations = counter.count();
+    }
+
+    CHECK(candidate == expected);
+    CHECK(allocations == 0);
+}
+
+TEST_CASE("node store purge candidate does not ignore records above the 250-node limit")
+{
+    constexpr uint32_t now = 10000;
+    NodeStore store;
+
+    for (uint32_t i = 0; i < 300; ++i) {
+        store.upsertUnknown(0x10000000U + i, 0, 1000U + i, static_cast<uint8_t>(unknownRole), false, false);
+    }
+
+    size_t seen = 0;
+    NodeId expected = 0;
+    for (const auto &[id, record] : store.records()) {
+        if (seen++ < 250) {
+            store.setActiveChat(id, true);
+        } else if (!expected || record.lastHeard < store.find(expected)->lastHeard) {
+            expected = id;
+        }
+    }
+    REQUIRE(expected != 0);
+    store.updateLastHeard(expected, 1);
+
+    CHECK(store.selectPurgeCandidate(0x40000000U, 0, now) == expected);
+}
+
 TEST_CASE("node store purge candidate returns zero when every node is protected")
 {
     constexpr uint32_t now = 100000;
@@ -345,6 +445,47 @@ TEST_CASE("node store purge candidate returns zero when every node is protected"
     store.setActiveChat(0x30, true);
 
     CHECK(store.selectPurgeCandidate(incoming, ownNode, now) == 0);
+}
+
+TEST_CASE("node store retains channel validity on invalid NodeInfo updates")
+{
+    NodeStore store;
+    constexpr NodeId existingId = 0x1234;
+    constexpr NodeId newId = 0x5678;
+
+    // Existing record keeps its channel when refreshed with sentinel value.
+    store.upsertUser(existingId, 2, 100, makeUser("ABCD", "Alpha"), false);
+    const auto invalidExisting = store.upsertUser(existingId, c_max_channels, 100, makeUser("EFGH", "Beta"), false);
+    REQUIRE(store.find(existingId) != nullptr);
+    CHECK(store.find(existingId)->channel == 2);
+    CHECK((invalidExisting.changedFields & NodeFieldChannel) == 0U);
+    CHECK(std::string(store.find(existingId)->user.long_name) == "Beta");
+
+    // New record with sentinel channel defaults to 0 without dirtying channel.
+    const auto invalidNew = store.upsertUser(newId, c_max_channels, 100, makeUser("WXYZ", "Gamma"), false);
+    REQUIRE(store.find(newId) != nullptr);
+    CHECK(store.find(newId)->channel == 0);
+    CHECK((invalidNew.changedFields & NodeFieldChannel) == 0U);
+}
+
+TEST_CASE("node store normalizes invalid channels in upsertUnknown as in upsertUser")
+{
+    NodeStore store;
+    constexpr NodeId id = 0x9999;
+    // Insert unknown with invalid channel retains default 0
+    const auto inserted = store.upsertUnknown(id, c_max_channels, 100, 0, false, false);
+    REQUIRE(store.find(id) != nullptr);
+    CHECK(store.find(id)->channel == 0);
+    CHECK((inserted.changedFields & NodeFieldChannel) == 0U);
+
+    // Unknown refresh retains channel even with valid value (consistent with
+    // existing retain test above) and invalid preserves.
+    const auto retained = store.upsertUnknown(id, 3, 100, 0, false, false);
+    CHECK(store.find(id)->channel == 0);
+    CHECK((retained.changedFields & NodeFieldChannel) == 0U);
+    const auto invalidRefresh = store.upsertUnknown(id, c_max_channels, 100, 0, false, false);
+    CHECK(store.find(id)->channel == 0);
+    CHECK((invalidRefresh.changedFields & NodeFieldChannel) == 0U);
 }
 
 TEST_CASE("node store never purges its sole record")

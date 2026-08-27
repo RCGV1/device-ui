@@ -9,7 +9,7 @@
 #include "util/ISpiLock.h"
 #include <functional>
 
-#if defined(DEVICE_UI_MUI_VIRTUAL_NODE_LIST) && defined(ARDUINO) && !defined(ARCH_PORTDUINO)
+#if defined(ARDUINO) && !defined(ARCH_PORTDUINO)
 void PowerFSM_notifyInput();
 #endif
 
@@ -240,6 +240,7 @@ template <class LGFX> void LGFXDriver<LGFX>::rounder_cb(lv_event_t *e)
 
 template <class LGFX> void LGFXDriver<LGFX>::touchpad_read(lv_indev_t *indev_driver, lv_indev_data_t *data)
 {
+    static bool touchWasPressed = false;
     uint16_t touchX = 0, touchY = 0;
 #ifdef CUSTOM_TOUCH_DRIVER
     bool touched = lgfx->getTouchXY(&touchX, &touchY); // I2C, no bus guard needed
@@ -252,11 +253,15 @@ template <class LGFX> void LGFXDriver<LGFX>::touchpad_read(lv_indev_t *indev_dri
     }
 #endif
     if (!touched) {
+        touchWasPressed = false;
         data->state = LV_INDEV_STATE_REL;
     } else {
-#if defined(DEVICE_UI_MUI_VIRTUAL_NODE_LIST) && defined(ARDUINO) && !defined(ARCH_PORTDUINO)
-        PowerFSM_notifyInput();
+#if defined(ARDUINO) && !defined(ARCH_PORTDUINO)
+        if (!touchWasPressed) {
+            PowerFSM_notifyInput();
+        }
 #endif
+        touchWasPressed = true;
         data->state = LV_INDEV_STATE_PR;
         data->point.x = touchX;
         data->point.y = touchY;

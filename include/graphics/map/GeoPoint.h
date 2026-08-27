@@ -47,8 +47,8 @@ class GeoPoint
         auto lat_rad = latitude * FLOATING_POINT(PI) / FLOATING_POINT(180.0);
         auto xRaw = (longitude + 180.0) / 360.0 * n;
         auto yRaw = (1.0 - std::log(std::tan(lat_rad) + (1.0 / std::cos(lat_rad))) / FLOATING_POINT(PI)) / 2.0 * n;
-        xPos = uint16_t(xRaw * size) % size;
-        yPos = uint16_t(yRaw * size) % size;
+        xPos = int16_t(std::fmod(xRaw * size, size));
+        yPos = int16_t(std::fmod(yRaw * size, size));
         xTile = uint32_t(xRaw);
         yTile = uint32_t(yRaw);
         zoomLevel = zoom;
@@ -128,6 +128,13 @@ TEST_CASE("GeoPoint locationMunichFrauenkirche")
     CHECK(p.zoomLevel == 15);
     CHECK(p.xTile == 17437);
     CHECK(p.yTile == 11371);
+}
+
+TEST_CASE("GeoPoint keeps large world pixel coordinates as tile-local offsets")
+{
+    GeoPoint p(48.13867316206941f, 11.573006651462567f, 15);
+    CHECK(p.xPos == 102);
+    CHECK(p.yPos == 189);
 }
 
 // TEST_CASE("GeoPoint reverseMunichFrauenkirche") {

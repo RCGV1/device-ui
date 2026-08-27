@@ -4,13 +4,7 @@
 #include <cstdint>
 #include <string>
 
-enum class NodeListVideoImplementation {
-    Legacy,
-    VirtualCandidate,
-};
-
 struct NodeListVideoOptions {
-    NodeListVideoImplementation implementation = NodeListVideoImplementation::Legacy;
     size_t nodes = 25;
     uint32_t seed = 1;
     size_t outputFrames = 1;

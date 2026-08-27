@@ -18,7 +18,6 @@ option(ENABLE_DOCTESTS "Include tests in the library. Setting this to OFF will r
 option(ENABLE_DEBUG_LOG "Enable debug log" OFF)
 option(ENABLE_MUI_HEADLESS_TESTS "Use deterministic headless display and input support for MUI integration tests" OFF)
 option(ENABLE_MUI_X11_SIMULATOR "Build the test-only interactive X11 MUI simulator" OFF)
-option(ENABLE_MUI_VIRTUAL_NODE_LIST "Use the test/development-only virtual MUI node list host" OFF)
 option(MUI_NODE_LIST_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer for native node-list tests" OFF)
 
 if(ENABLE_MUI_HEADLESS_TESTS AND NOT ENABLE_DOCTESTS)
@@ -27,10 +26,6 @@ endif()
 
 if(ENABLE_MUI_X11_SIMULATOR AND NOT ENABLE_DOCTESTS)
     message(FATAL_ERROR "ENABLE_MUI_X11_SIMULATOR requires ENABLE_DOCTESTS")
-endif()
-
-if(ENABLE_MUI_VIRTUAL_NODE_LIST AND NOT (ENABLE_MUI_HEADLESS_TESTS OR ENABLE_MUI_X11_SIMULATOR))
-    message(FATAL_ERROR "ENABLE_MUI_VIRTUAL_NODE_LIST is test/development-only and requires ENABLE_MUI_HEADLESS_TESTS or ENABLE_MUI_X11_SIMULATOR")
 endif()
 
 if(MUI_NODE_LIST_SANITIZERS)
@@ -49,14 +44,22 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin")
-set(GENERATED_VIEW ${VIEW} "ui_320x240")
+set(MUI_GENERATED_VIEW "ui_320x240" CACHE STRING "Generated MUI layout used by native tests")
+set_property(CACHE MUI_GENERATED_VIEW PROPERTY STRINGS ui_320x240 ui_240x320)
+set(GENERATED_VIEW ${VIEW} ${MUI_GENERATED_VIEW})
 
 message(STATUS "Using C++${CMAKE_CXX_STANDARD}")
 message(STATUS "Using Generated View: " ${GENERATED_VIEW})
 
 add_compile_definitions(ARCH_PORTDUINO)
 add_compile_definitions(ARDUINO)
-add_compile_definitions(VIEW_320x240)
+if(GENERATED_VIEW STREQUAL "ui_320x240")
+    add_compile_definitions(VIEW_320x240 MUI_TEST_DISPLAY_WIDTH=320 MUI_TEST_DISPLAY_HEIGHT=240)
+elseif(GENERATED_VIEW STREQUAL "ui_240x320")
+    add_compile_definitions(VIEW_240x320 MUI_TEST_DISPLAY_WIDTH=240 MUI_TEST_DISPLAY_HEIGHT=320)
+else()
+    message(FATAL_ERROR "MUI_GENERATED_VIEW must be ui_320x240 or ui_240x320")
+endif()
 
 if(ENABLE_MUI_HEADLESS_TESTS)
     add_compile_definitions(DEVICE_UI_HEADLESS_TEST)
@@ -153,9 +156,6 @@ endif()
 
 add_library(DeviceUI ${sources})
 target_link_libraries(DeviceUI PRIVATE lvgl::lvgl LovyanGFX Portduino Protobufs CURL::libcurl)
-if(ENABLE_MUI_VIRTUAL_NODE_LIST)
-    target_compile_definitions(DeviceUI PUBLIC DEVICE_UI_MUI_VIRTUAL_NODE_LIST)
-endif()
 
 if(ENABLE_MUI_HEADLESS_TESTS)
     execute_process(
@@ -265,9 +265,6 @@ if(ENABLE_MUI_X11_SIMULATOR)
         target_link_libraries(${target} PRIVATE lvgl::lvgl LovyanGFX Portduino Protobufs CURL::libcurl)
         target_compile_definitions(${target} PUBLIC DEVICE_UI_MUI_NODE_LIST_HW_BENCH)
         target_compile_definitions(${target} PRIVATE UNIT_TEST)
-        if(ARGC GREATER 1 AND ARGV1 STREQUAL "VIRTUAL")
-            target_compile_definitions(${target} PUBLIC DEVICE_UI_MUI_VIRTUAL_NODE_LIST)
-        endif()
         target_compile_options(${target} PUBLIC -Wall -Wno-format -Wfloat-conversion)
         target_include_directories(${target} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}
@@ -288,14 +285,7 @@ if(ENABLE_MUI_X11_SIMULATOR)
             target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-includeArduino.h>")
         endif()
     endfunction()
-    if(ENABLE_MUI_VIRTUAL_NODE_LIST)
-        configure_x11_benchmark_device_ui(DeviceUIX11Benchmark VIRTUAL)
-    else()
-        configure_x11_benchmark_device_ui(DeviceUIX11Benchmark)
-    endif()
-    if(ENABLE_MUI_VIRTUAL_NODE_LIST)
-        configure_x11_benchmark_device_ui(DeviceUIX11BenchmarkLegacy)
-    endif()
+    configure_x11_benchmark_device_ui(DeviceUIX11Benchmark)
 
     function(add_mui_node_list_simulator target node_list_simulator_library)
         add_executable(${target}
@@ -344,9 +334,6 @@ if(ENABLE_MUI_X11_SIMULATOR)
     endfunction()
 
     add_mui_node_list_simulator(mui_node_list_simulator DeviceUIX11Benchmark)
-    if(ENABLE_MUI_VIRTUAL_NODE_LIST)
-        add_mui_node_list_simulator(mui_node_list_simulator_legacy DeviceUIX11BenchmarkLegacy)
-    endif()
 endif()
 
 # Handle Windows Static linking dependencies if applicable
@@ -408,7 +395,7 @@ if(ENABLE_DOCTESTS)
             endforeach()
         endif()
     endif()
-    target_include_directories(tests PRIVATE 
+    target_include_directories(tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/locale
@@ -424,7 +411,14 @@ if(ENABLE_DOCTESTS)
     if(ENABLE_MUI_HEADLESS_TESTS)
         add_test(NAME MuiNodeListIntegration COMMAND tests
                  "--test-case=*headless display*,*view updates model*,*node model*,*unknown ingress*,*last-heard updates*")
-        add_test(NAME NodeListBenchmark COMMAND tests "--test-case=*baseline benchmark emits list diagnostics*")
+        add_test(NAME NodeListBenchmark COMMAND tests "--test-case=*benchmark*")
+        add_test(NAME NodeListVideoCapture
+                 COMMAND node_list_video
+                     --implementation production
+                     --nodes 8
+                     --seed 42
+                     --output-frames 1
+                     --output-dir ${CMAKE_BINARY_DIR}/node-list-video-capture)
         add_test(NAME NodeListScrollTelemetry
                  COMMAND ${CMAKE_COMMAND}
                          -DNODE_LIST_BENCH=$<TARGET_FILE:node_list_bench>
@@ -435,7 +429,7 @@ if(ENABLE_DOCTESTS)
                      --nodes ${NODE_LIST_BENCHMARK_NODE_COUNT}
                      --trials 1
                      --seed 42
-                     --implementation virtual_candidate
+                     --implementation production
                      --json ${CMAKE_BINARY_DIR}/node-list-allocator-${NODE_LIST_BENCHMARK_NODE_COUNT}.json)
         endforeach()
         add_test(NAME NodeStore COMMAND tests "--test-case=*node store*")
@@ -451,26 +445,9 @@ if(ENABLE_DOCTESTS)
                  COMMAND ${CMAKE_COMMAND}
                  -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
                  -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/AssertMuiX11NoWaitN.cmake)
-        if(ENABLE_MUI_VIRTUAL_NODE_LIST)
-            add_test(NAME MuiX11SimulatorPairLaunch
-                     COMMAND ${CMAKE_COMMAND}
-                     -DMUI_NODE_LIST_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator>
-                     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunMuiX11SimulatorPairLaunchTest.cmake)
-            add_test(NAME MuiX11SimulatorWheelRequired
-                     COMMAND ${CMAKE_COMMAND}
-                     -DMUI_NODE_LIST_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator>
-                     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/AssertMuiX11WheelRequired.cmake)
-            add_test(NAME MuiX11SimulatorBenchmarkPair
-                     COMMAND ${CMAKE_COMMAND}
-                     -DMUI_NODE_LIST_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator>
-                     -DMUI_NODE_LIST_LEGACY_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator_legacy>
-                     -DMUI_NODE_LIST_VIRTUAL_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator>
-                     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunMuiX11SimulatorBenchmarkPairTest.cmake)
-        else()
-            add_test(NAME MuiX11SimulatorRejectsVirtualCandidate
-                     COMMAND ${CMAKE_COMMAND}
-                     -DMUI_NODE_LIST_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator>
-                     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/AssertMuiX11SimulatorRejectsVirtualCandidate.cmake)
-        endif()
+        add_test(NAME MuiX11SimulatorWheelRequired
+                 COMMAND ${CMAKE_COMMAND}
+                 -DMUI_NODE_LIST_SIMULATOR=$<TARGET_FILE:mui_node_list_simulator>
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/AssertMuiX11WheelRequired.cmake)
     endif()
 endif()

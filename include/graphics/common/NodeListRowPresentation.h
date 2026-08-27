@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fonts.h"
+#include "graphics/common/NodeStore.h"
 #include "lvgl.h"
 #include "meshtastic/mesh.pb.h"
 #include "meshtastic/telemetry.pb.h"
@@ -96,8 +97,8 @@ inline void formatShortNameWithDistance(char *buffer, size_t bufferSize, const c
         buffer[i] = ' ';
     }
 
-    const float dx = 71.5f * 1e-7f * static_cast<float>(ownLongitude - longitude);
-    const float dy = 111.3f * 1e-7f * static_cast<float>(ownLatitude - latitude);
+    const float dx = 71.5f * 1e-7f * (static_cast<float>(ownLongitude) - static_cast<float>(longitude));
+    const float dy = 111.3f * 1e-7f * (static_cast<float>(ownLatitude) - static_cast<float>(latitude));
     const float dist = std::sqrt(dx * dx + dy * dy);
 
     buffer[4] = '\n';
@@ -121,7 +122,7 @@ inline void formatShortNameWithDistance(char *buffer, size_t bufferSize, const c
 inline void formatPositionLines(int32_t latitude, int32_t longitude, int32_t altitude, bool metricUnits, char *positionText,
                                 size_t positionTextSize, char *altitudeText, size_t altitudeTextSize)
 {
-    int32_t shownAltitude = std::abs(altitude) < 10000 ? altitude : 0;
+    int32_t shownAltitude = altitude > -10000 && altitude < 10000 ? altitude : 0;
     const char *altitudeUnits = "m";
     if (!metricUnits) {
         shownAltitude = static_cast<int32_t>(static_cast<float>(shownAltitude) * 3.28084f);

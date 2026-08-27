@@ -80,8 +80,7 @@ jobs:
         run: |
           cmake -S . -B build-node-list-bench -G Ninja \
             -DENABLE_MUI_HEADLESS_TESTS=ON \
-            -DENABLE_DOCTESTS=ON \
-            -DENABLE_MUI_VIRTUAL_NODE_LIST=ON
+            -DENABLE_DOCTESTS=ON
 
       - name: Build Linux Node List Benchmark
         run: |
@@ -93,5 +92,5 @@ jobs:
             --nodes 25 \
             --trials 1 \
             --seed 42 \
-            --implementation virtual_candidate \
+            --implementation production \
             --json build-node-list-bench/node-list-bench-linux-smoke.json

@@ -24,6 +24,17 @@ const lv_color_t highlightBlue = lv_color_hex(0x436c70);
 const lv_color_t highlightMidGray = lv_color_hex(0x808080);
 const lv_color_t highlightMesh = lv_color_hex(0x67ea94);
 
+size_t rowPoolSizeForViewport(lv_obj_t *parentPanel)
+{
+    lv_obj_update_layout(parentPanel);
+    const int32_t contentHeight = lv_obj_get_height(parentPanel) - lv_obj_get_style_pad_top(parentPanel, LV_PART_MAIN) -
+                                  lv_obj_get_style_pad_bottom(parentPanel, LV_PART_MAIN);
+    const size_t visibleRows =
+        static_cast<size_t>(std::max<int32_t>(0, contentHeight) + VirtualNodeList::COLLAPSED_ROW_HEIGHT - 1) /
+        (VirtualNodeList::COLLAPSED_ROW_HEIGHT + VirtualNodeList::ROW_GAP);
+    return std::clamp(visibleRows + 1, VirtualNodeList::POOL_SIZE, VirtualNodeList::MAX_POOL_SIZE);
+}
+
 template <size_t Size> void setRowText(lv_obj_t *label, char (&storage)[Size], const char *text)
 {
     std::snprintf(storage, Size, "%s", text ? text : "");
@@ -157,6 +168,7 @@ VirtualNodeList::VirtualNodeList(lv_obj_t *parent, NodeListActionSink &sink) : p
 {
     if (parentPanel) {
         lv_obj_add_event_cb(parentPanel, scrollEventCallback, LV_EVENT_SCROLL, this);
+        lv_obj_add_event_cb(parentPanel, scrollEventCallback, LV_EVENT_SCROLL_END, this);
         createRowPool();
         attachGroupNavigation();
     }
@@ -167,7 +179,7 @@ VirtualNodeList::~VirtualNodeList()
     lv_anim_delete(this, expansionAnimationCallback);
     detachGroupNavigation();
     if (parentPanel) {
-        lv_obj_remove_event_cb(parentPanel, scrollEventCallback);
+        lv_obj_remove_event_cb_with_user_data(parentPanel, scrollEventCallback, this);
     }
     if (spacer) {
         lv_obj_delete(spacer);
@@ -200,9 +212,9 @@ void VirtualNodeList::createRowPool()
     lv_obj_set_style_border_width(spacer, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_pad_all(spacer, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
-    rowPool.resize(POOL_SIZE);
+    rowPool.resize(rowPoolSizeForViewport(parentPanel));
 
-    for (size_t i = 0; i < POOL_SIZE; ++i) {
+    for (size_t i = 0; i < rowPool.size(); ++i) {
         auto &row = rowPool[i];
 
         row.panel = lv_obj_create(parentPanel);
@@ -243,7 +255,7 @@ void VirtualNodeList::createRowPool()
         row.lblLong = lv_label_create(row.panel);
         lv_obj_set_pos(row.lblLong, -5, 35);
         lv_obj_set_size(row.lblLong, lv_pct(80), LV_SIZE_CONTENT);
-        lv_label_set_long_mode(row.lblLong, LV_LABEL_LONG_SCROLL);
+        lv_label_set_long_mode(row.lblLong, LV_LABEL_LONG_DOT);
         lv_obj_set_style_align(row.lblLong, LV_ALIGN_TOP_LEFT, LV_PART_MAIN | LV_STATE_DEFAULT);
 
         row.lblShort = lv_label_create(row.panel);
@@ -291,7 +303,7 @@ void VirtualNodeList::createRowPool()
         row.lblPos2 = lv_label_create(row.panel);
         lv_obj_set_pos(row.lblPos2, -5, 63);
         lv_obj_set_size(row.lblPos2, 108, LV_SIZE_CONTENT);
-        lv_label_set_long_mode(row.lblPos2, LV_LABEL_LONG_SCROLL);
+        lv_label_set_long_mode(row.lblPos2, LV_LABEL_LONG_DOT);
         lv_obj_remove_flag(row.lblPos2, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_style_align(row.lblPos2, LV_ALIGN_TOP_LEFT, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_add_flag(row.lblPos2, LV_OBJ_FLAG_HIDDEN);
@@ -677,7 +689,7 @@ size_t VirtualNodeList::poolIndexForButton(lv_obj_t *button) const
             return i;
         }
     }
-    return POOL_SIZE;
+    return rowPool.size();
 }
 
 void VirtualNodeList::noteFocusedButton(lv_obj_t *button)
@@ -738,9 +750,6 @@ void VirtualNodeList::handleGroupEdge(bool forward)
 void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool isExpanded)
 {
     bindGeneration++;
-    if (attachedGroup && row.btn && lv_obj_get_group(row.btn) != attachedGroup) {
-        lv_group_add_obj(attachedGroup, row.btn);
-    }
     row.boundId = record.id;
     lv_obj_set_user_data(row.panel, reinterpret_cast<void *>(static_cast<uintptr_t>(record.id)));
     lv_obj_set_user_data(row.btn, reinterpret_cast<void *>(static_cast<uintptr_t>(record.id)));
@@ -753,9 +762,23 @@ void VirtualNodeList::bindRow(ReusableRow &row, const NodeRecord &record, bool i
         lv_obj_set_style_border_color(row.img, lv_obj_get_style_bg_color(row.img, LV_PART_MAIN), LV_PART_MAIN | LV_STATE_DEFAULT);
     }
 
-    formatShortName(record, renderContext, row.shortText, sizeof(row.shortText));
-    lv_label_set_text_static(row.lblShort, row.shortText);
-    lv_obj_set_pos(row.lblShort, 30, std::strchr(row.shortText, '\n') ? -1 : 10);
+    const bool shortTextChanged =
+        !row.detailKeysValid || row.detailShortId != record.id || row.detailOwnNode != renderContext.ownNode ||
+        std::memcmp(row.detailShortName, record.user.short_name, sizeof(row.detailShortName)) != 0 ||
+        row.detailHasOwnPosition != renderContext.hasOwnPosition || row.detailOwnLatitude != renderContext.ownLatitude ||
+        row.detailOwnLongitude != renderContext.ownLongitude || row.detailLatitude != record.position.latitude ||
+        row.detailLongitude != record.position.longitude || row.detailMetricUnits != renderContext.metricUnits;
+    if (shortTextChanged) {
+        formatShortName(record, renderContext, row.shortText, sizeof(row.shortText));
+        lv_label_set_text_static(row.lblShort, row.shortText);
+        lv_obj_set_pos(row.lblShort, 30, std::strchr(row.shortText, '\n') ? -1 : 10);
+        row.detailShortId = record.id;
+        row.detailOwnNode = renderContext.ownNode;
+        std::memcpy(row.detailShortName, record.user.short_name, sizeof(row.detailShortName));
+        row.detailHasOwnPosition = renderContext.hasOwnPosition;
+        row.detailOwnLatitude = renderContext.ownLatitude;
+        row.detailOwnLongitude = renderContext.ownLongitude;
+    }
     setRowText(row.lblLong, row.longText, record.user.long_name);
 
     const bool hasBattery =
@@ -908,7 +931,7 @@ void VirtualNodeList::applyHighlight(ReusableRow &row, const NodeRecord &record)
     }
 }
 
-void VirtualNodeList::refreshVisibleRows(bool force, bool rebind)
+void VirtualNodeList::refreshVisibleRows(bool force, bool rebind, bool reorder)
 {
     if (!parentPanel || !currentIndex || !currentStore) {
         return;
@@ -918,7 +941,7 @@ void VirtualNodeList::refreshVisibleRows(bool force, bool rebind)
     if (ids.empty()) {
         for (auto &row : rowPool) {
             lv_obj_add_flag(row.panel, LV_OBJ_FLAG_HIDDEN);
-            if (attachedGroup && row.btn && lv_obj_get_group(row.btn) == attachedGroup) {
+            if (reorder && attachedGroup && row.btn && lv_obj_get_group(row.btn) == attachedGroup) {
                 lv_group_remove_obj(row.btn);
             }
             clearRowBinding(row);
@@ -942,15 +965,15 @@ void VirtualNodeList::refreshVisibleRows(bool force, bool rebind)
         firstIdx = ids.size() - 1;
     }
     const size_t previousFirstRenderedIndex = firstRenderedIndex;
-    if (!force && previousFirstRenderedIndex == firstIdx) {
+    if (!force && previousFirstRenderedIndex == firstIdx && !reorder) {
         return;
     }
     firstRenderedIndex = firstIdx;
 
     constexpr size_t unusedRow = std::numeric_limits<size_t>::max();
-    const size_t visibleCount = std::min(POOL_SIZE, ids.size() - firstIdx);
-    std::array<size_t, POOL_SIZE> assignedRows{};
-    std::array<bool, POOL_SIZE> usedRows{};
+    const size_t visibleCount = std::min(rowPool.size(), ids.size() - firstIdx);
+    std::array<size_t, MAX_POOL_SIZE> assignedRows{};
+    std::array<bool, MAX_POOL_SIZE> usedRows{};
     assignedRows.fill(unusedRow);
 
     for (size_t slot = 0; slot < visibleCount; ++slot) {
@@ -1003,7 +1026,7 @@ void VirtualNodeList::refreshVisibleRows(bool force, bool rebind)
             lv_obj_remove_flag(row.panel, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(row.panel, LV_OBJ_FLAG_HIDDEN);
-            if (attachedGroup && row.btn && lv_obj_get_group(row.btn) == attachedGroup) {
+            if (reorder && attachedGroup && row.btn && lv_obj_get_group(row.btn) == attachedGroup) {
                 lv_group_remove_obj(row.btn);
             }
             clearRowBinding(row);
@@ -1016,37 +1039,59 @@ void VirtualNodeList::refreshVisibleRows(bool force, bool rebind)
         }
         auto &row = rowPool[rowIndex];
         lv_obj_add_flag(row.panel, LV_OBJ_FLAG_HIDDEN);
-        if (attachedGroup && row.btn && lv_obj_get_group(row.btn) == attachedGroup) {
+        if (reorder && attachedGroup && row.btn && lv_obj_get_group(row.btn) == attachedGroup) {
             lv_group_remove_obj(row.btn);
         }
         clearRowBinding(row);
     }
 
-    const bool canRotateOneRow =
-        !force && !rebind && visibleCount == POOL_SIZE && previousFirstRenderedIndex != std::numeric_limits<size_t>::max();
-    const bool forwardOneRow = canRotateOneRow && firstIdx == previousFirstRenderedIndex + 1;
-    const bool backwardOneRow = canRotateOneRow && firstIdx + 1 == previousFirstRenderedIndex;
+    if (!reorder) {
+        return;
+    }
 
-    if (forwardOneRow) {
-        const size_t rowIndex = assignedRows[visibleCount - 1];
-        lv_obj_move_to_index(rowPool[rowIndex].panel, static_cast<int32_t>(visibleCount));
+    if (attachedGroup) {
+        for (size_t rowIndex = 0; rowIndex < rowPool.size(); ++rowIndex) {
+            auto &row = rowPool[rowIndex];
+            if (usedRows[rowIndex]) {
+                if (row.btn && lv_obj_get_group(row.btn) != attachedGroup) {
+                    lv_group_add_obj(attachedGroup, row.btn);
+                }
+            } else if (row.btn && lv_obj_get_group(row.btn) == attachedGroup) {
+                lv_group_remove_obj(row.btn);
+            }
+        }
+    }
+
+    const bool canRotateRows =
+        !force && !rebind && visibleCount == rowPool.size() && previousFirstRenderedIndex != std::numeric_limits<size_t>::max();
+    const size_t forwardRows = canRotateRows && firstIdx > previousFirstRenderedIndex ? firstIdx - previousFirstRenderedIndex : 0;
+    const size_t backwardRows =
+        canRotateRows && previousFirstRenderedIndex > firstIdx ? previousFirstRenderedIndex - firstIdx : 0;
+
+    if (forwardRows > 0 && forwardRows < visibleCount) {
+        for (size_t slot = visibleCount - forwardRows; slot < visibleCount; ++slot) {
+            const size_t rowIndex = assignedRows[slot];
+            lv_obj_move_to_index(rowPool[rowIndex].panel, static_cast<int32_t>(visibleCount));
 #ifdef UNIT_TEST
-        ++panelOrderMoveCount;
+            ++panelOrderMoveCount;
 #endif
-        moveGroupButtonToTail(attachedGroup, rowPool[rowIndex].btn);
+            moveGroupButtonToTail(attachedGroup, rowPool[rowIndex].btn);
 #ifdef UNIT_TEST
-        ++groupOrderMoveCount;
+            ++groupOrderMoveCount;
 #endif
-    } else if (backwardOneRow) {
-        const size_t rowIndex = assignedRows[0];
-        lv_obj_move_to_index(rowPool[rowIndex].panel, 1);
+        }
+    } else if (backwardRows > 0 && backwardRows < visibleCount) {
+        for (size_t slot = backwardRows; slot > 0; --slot) {
+            const size_t rowIndex = assignedRows[slot - 1];
+            lv_obj_move_to_index(rowPool[rowIndex].panel, 1);
 #ifdef UNIT_TEST
-        ++panelOrderMoveCount;
+            ++panelOrderMoveCount;
 #endif
-        moveGroupButtonToHead(attachedGroup, rowPool[rowIndex].btn);
+            moveGroupButtonToHead(attachedGroup, rowPool[rowIndex].btn);
 #ifdef UNIT_TEST
-        ++groupOrderMoveCount;
+            ++groupOrderMoveCount;
 #endif
+        }
     } else {
         if (spacer) {
             lv_obj_move_to_index(spacer, 0);
@@ -1118,7 +1163,7 @@ void VirtualNodeList::scrollEventCallback(lv_event_t *e)
 {
     auto *self = static_cast<VirtualNodeList *>(lv_event_get_user_data(e));
     if (self) {
-        self->refreshVisibleRows();
+        self->refreshVisibleRows(false, false, lv_event_get_code(e) == LV_EVENT_SCROLL_END);
     }
 }
 

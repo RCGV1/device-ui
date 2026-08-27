@@ -21,13 +21,44 @@ bool containsCaseInsensitive(const char *haystack, const std::string &needle)
     return it != (haystack + std::strlen(haystack));
 }
 
+bool rankedBefore(const NodeStore &store, uint32_t now, NodeId ownNode, NodeId a, NodeId b)
+{
+    if (a != b) {
+        if (a == ownNode && ownNode != 0) {
+            return true;
+        }
+        if (b == ownNode && ownNode != 0) {
+            return false;
+        }
+    }
+    const auto *recA = store.find(a);
+    const auto *recB = store.find(b);
+    uint32_t lhA = recA ? recA->lastHeard : 0;
+    uint32_t lhB = recB ? recB->lastHeard : 0;
+    if (now != 0) {
+        lhA = lhA > now ? now : lhA;
+        lhB = lhB > now ? now : lhB;
+    }
+    if (lhA != lhB) {
+        return lhA > lhB;
+    }
+    uint64_t recencyA = recA ? recA->recencyOrder : 0;
+    uint64_t recencyB = recB ? recB->recencyOrder : 0;
+    const bool promotedA = recA && recA->recencyPromoted;
+    const bool promotedB = recB && recB->recencyPromoted;
+    if (promotedA != promotedB) {
+        return promotedA;
+    }
+    if (recencyA != recencyB) {
+        return promotedA ? recencyA > recencyB : recencyA < recencyB;
+    }
+    return a < b;
+}
+
 } // namespace
 
-bool VisibleNodeIndex::isVisible(const NodeRecord &node, const NodeListFilter &filter, NodeId ownNode,
-                                 NodeListFilterPolicy policy)
+bool VisibleNodeIndex::isVisible(const NodeRecord &node, const NodeListFilter &filter, NodeId ownNode)
 {
-    (void)policy;
-
     // Own node is never hidden by filters in MUI
     if (node.id == ownNode && ownNode != 0) {
         return true;
@@ -130,16 +161,26 @@ bool VisibleNodeIndex::isVisible(const NodeRecord &node, const NodeListFilter &f
     return true;
 }
 
-void VisibleNodeIndex::rebuild(const NodeStore &store, const NodeListFilter &filter, NodeId ownNode, NodeListFilterPolicy policy)
+void VisibleNodeIndex::rebuild(const NodeStore &store, const NodeListFilter &filter, NodeId ownNode)
 {
     std::vector<NodeId> &next = rebuildScratch;
     next.clear();
-    next.reserve(store.size());
+    next.reserve(visibleMembership.size());
 
     for (const auto &pair : store.records()) {
         const auto &record = pair.second;
-        if (isVisible(record, filter, ownNode, policy)) {
-            next.push_back(record.id);
+        if (isVisible(record, filter, ownNode)) {
+            if (next.size() < visibleMembership.size()) {
+                next.push_back(record.id);
+            } else {
+                auto worst =
+                    std::max_element(next.begin(), next.end(), [&store, now = filter.curTime, ownNode](NodeId a, NodeId b) {
+                        return rankedBefore(store, now, ownNode, a, b);
+                    });
+                if (worst != next.end() && rankedBefore(store, filter.curTime, ownNode, record.id, *worst)) {
+                    *worst = record.id;
+                }
+            }
         }
     }
 
@@ -169,43 +210,13 @@ void VisibleNodeIndex::rebuild(const NodeStore &store, const NodeListFilter &fil
 
     // Sort by effective lastHeard descending, then newest same-second mutation
     // first. The own node keeps the first position regardless of freshness.
-    std::sort(next.begin(), next.end(), [&store, now = filter.curTime, ownNode](NodeId a, NodeId b) {
-        if (a != b) {
-            if (a == ownNode && ownNode != 0) {
-                return true;
-            }
-            if (b == ownNode && ownNode != 0) {
-                return false;
-            }
-        }
-        const auto *recA = store.find(a);
-        const auto *recB = store.find(b);
-        uint32_t lhA = recA ? recA->lastHeard : 0;
-        uint32_t lhB = recB ? recB->lastHeard : 0;
-        if (now != 0) {
-            lhA = lhA > now ? now : lhA;
-            lhB = lhB > now ? now : lhB;
-        }
-        if (lhA != lhB) {
-            return lhA > lhB;
-        }
-        uint64_t recencyA = recA ? recA->recencyOrder : 0;
-        uint64_t recencyB = recB ? recB->recencyOrder : 0;
-        const bool promotedA = recA && recA->recencyPromoted;
-        const bool promotedB = recB && recB->recencyPromoted;
-        if (promotedA != promotedB) {
-            return promotedA;
-        }
-        if (recencyA != recencyB) {
-            return promotedA ? recencyA > recencyB : recencyA < recencyB;
-        }
-        return a < b;
-    });
+    std::sort(next.begin(), next.end(),
+              [&store, now = filter.curTime, ownNode](NodeId a, NodeId b) { return rankedBefore(store, now, ownNode, a, b); });
 
     // Only publish (and bump the generation for) genuinely changed orders so
     // redundant syncs can skip their refresh work downstream.
     if (next != visibleIds) {
-        visibleIds.swap(next);
+        visibleIds = next;
         ++rebuildGeneration;
     }
 }
@@ -225,5 +236,5 @@ bool VisibleNodeIndex::contains(NodeId id) const
 #ifdef UNIT_TEST
     ++containsCallCount;
 #endif
-    return indexOf(id).has_value();
+    return std::binary_search(visibleMembership.begin(), visibleMembership.begin() + visibleMembershipSize, id);
 }

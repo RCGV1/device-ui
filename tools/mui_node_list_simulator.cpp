@@ -23,7 +23,6 @@ namespace
 int x11ErrorCount = 0;
 
 struct Options {
-    X11MuiSimulator::Implementation implementation = X11MuiSimulator::Implementation::Legacy;
     size_t nodes = 100;
     uint32_t seed = 42;
     uint32_t runForMs = 0;
@@ -35,7 +34,7 @@ struct Options {
 };
 
 constexpr std::string_view usage =
-    "usage: mui_node_list_simulator --implementation legacy|virtual_candidate [--nodes N] [--seed N] [--run-for-ms N] "
+    "usage: mui_node_list_simulator --implementation production [--nodes N] [--seed N] [--run-for-ms N] "
     "[--window-title TITLE] [--exercise-x11-input] [--hardware-benchmark] [--tdeck-constrained] [--report PATH]";
 
 constexpr uint32_t tdeckModelDisplayWidth = 320;
@@ -44,11 +43,6 @@ constexpr uint32_t tdeckModelUiPeriodMs = 40;
 constexpr uint32_t tdeckModelSpiHz = 40000000;
 constexpr uint32_t tdeckModelRgb565FrameBytes = tdeckModelDisplayWidth * tdeckModelDisplayHeight * 2;
 constexpr std::string_view tdeckModelFrameTransferMs = "30.72";
-
-const char *implementationName(X11MuiSimulator::Implementation implementation)
-{
-    return implementation == X11MuiSimulator::Implementation::VirtualCandidate ? "virtual_candidate" : "legacy";
-}
 
 bool displayAvailable()
 {
@@ -92,16 +86,7 @@ bool parseOptions(int argc, char **argv, Options &options)
         const std::string_view value(argv[index + 1]);
         if (flag == "--implementation" && !sawImplementation) {
             sawImplementation = true;
-            if (value == "legacy") {
-                options.implementation = X11MuiSimulator::Implementation::Legacy;
-            } else if (value == "virtual_candidate") {
-#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
-                options.implementation = X11MuiSimulator::Implementation::VirtualCandidate;
-#else
-                std::cerr << "virtual_candidate requires ENABLE_MUI_VIRTUAL_NODE_LIST\n";
-                return false;
-#endif
-            } else {
+            if (value != "production") {
                 return false;
             }
         } else if (flag == "--nodes" && parseUnsigned(value, parsed) && parsed > 0 &&
@@ -314,15 +299,19 @@ X11ExerciseReport exerciseX11Input(X11MuiSimulator &simulator, const std::string
 
     XRaiseWindow(display, window);
     XSetInputFocus(display, window, RevertToParent, CurrentTime);
-    XWarpPointer(display, None, window, 0, 0, 0, 0, 160, 210);
+    const int16_t centerX = static_cast<int16_t>(MUI_TEST_DISPLAY_WIDTH / 2);
+    const int16_t dragStartY = static_cast<int16_t>(MUI_TEST_DISPLAY_HEIGHT * 7 / 8);
+    const int16_t dragEndY = static_cast<int16_t>(MUI_TEST_DISPLAY_HEIGHT / 8);
+    XWarpPointer(display, None, window, 0, 0, 0, 0, centerX, dragStartY);
     XFlush(display);
     pumpFor(simulator, 40);
 
     report.dragScrollBefore = simulator.nodeListScrollYForTesting();
     int errorCountBefore = x11ErrorCount;
     bool dragStatus = XTestFakeButtonEvent(display, Button1, True, CurrentTime);
-    for (int y : {180, 140, 100, 60, 40}) {
-        dragStatus = XTestFakeMotionEvent(display, DefaultScreen(display), 160, y, CurrentTime) && dragStatus;
+    for (int step = 1; step <= 5; ++step) {
+        const int16_t y = static_cast<int16_t>(dragStartY + (dragEndY - dragStartY) * step / 5);
+        dragStatus = XTestFakeMotionEvent(display, DefaultScreen(display), centerX, y, CurrentTime) && dragStatus;
         XFlush(display);
         pumpFor(simulator, 30);
     }
@@ -334,12 +323,12 @@ X11ExerciseReport exerciseX11Input(X11MuiSimulator &simulator, const std::string
 
     report.clickSelectedBefore = simulator.selectedNodeForTesting();
     report.clickFocusBefore = simulator.focusedObjectForTesting();
-    int16_t clickX = 160;
-    int16_t clickY = 82;
+    int16_t clickX = centerX;
+    int16_t clickY = static_cast<int16_t>(MUI_TEST_DISPLAY_HEIGHT / 3);
     uintptr_t clickTarget = 0;
     if (simulator.nodeListClickTargetForTesting(clickX, clickY, clickTarget)) {
-        clickX = std::max<int16_t>(5, std::min<int16_t>(314, clickX));
-        clickY = std::max<int16_t>(5, std::min<int16_t>(234, clickY));
+        clickX = std::max<int16_t>(5, std::min<int16_t>(MUI_TEST_DISPLAY_WIDTH - 6, clickX));
+        clickY = std::max<int16_t>(5, std::min<int16_t>(MUI_TEST_DISPLAY_HEIGHT - 6, clickY));
     }
     report.clickTarget = clickTarget;
     report.clickX = clickX;
@@ -418,8 +407,8 @@ bool writeReport(const Options &options, const X11MuiSimulator &simulator, const
     if (!output) {
         return false;
     }
-    output << "implementation=" << implementationName(options.implementation) << '\n';
-    output << "virtual_enabled=" << (simulator.virtualNodeListEnabledForTesting() ? 1 : 0) << '\n';
+    output << "implementation=production\n";
+    output << "virtual_enabled=1\n";
     output << "rendered_nodes=" << simulator.renderedNodeCountForTesting() << '\n';
     output << "tdeck_constrained=" << (options.tdeckConstrained ? 1 : 0) << '\n';
     if (options.tdeckConstrained) {
@@ -530,16 +519,18 @@ int main(int argc, char **argv)
     if (!options.windowTitle.empty()) {
         setenv("DEVICE_UI_X11_WINDOW_TITLE", options.windowTitle.c_str(), 1);
     }
-    if (!simulator.initialize(options.implementation)) {
+    if (!simulator.initialize()) {
         std::cerr << "failed to initialize X11 MUI simulator\n";
         return 1;
     }
-    simulator.populateLegacyNodeFixtures(options.nodes, options.seed);
+    simulator.populateNodeFixtures(options.nodes, options.seed);
     X11ExerciseReport exercise{};
     std::string hardwareBenchmarkReport;
     bool hardwareBenchmarkComplete = false;
     if (options.exerciseX11Input) {
-        const std::string title = options.windowTitle.empty() ? "Meshtastic (320x240)" : options.windowTitle;
+        const std::string title = options.windowTitle.empty() ? "Meshtastic (" + std::to_string(MUI_TEST_DISPLAY_WIDTH) + "x" +
+                                                                    std::to_string(MUI_TEST_DISPLAY_HEIGHT) + ")"
+                                                              : options.windowTitle;
         exercise = exerciseX11Input(simulator, title);
         if (!exercise.openedDisplay || !exercise.foundWindow || !exercise.dragSent || !exercise.wheelSent ||
             !exercise.clickSent || !exercise.keySent || !exercise.dragXTestOk || !exercise.wheelXTestOk ||

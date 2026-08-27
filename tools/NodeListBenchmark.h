@@ -6,17 +6,11 @@
 #include <string>
 #include <vector>
 
-enum class NodeListBenchmarkImplementation {
-    Legacy,
-    VirtualCandidate,
-};
-
 struct NodeListBenchmarkOptions {
     size_t nodes;
     size_t trials;
     uint32_t seed;
     size_t warmup;
-    NodeListBenchmarkImplementation implementation = NodeListBenchmarkImplementation::Legacy;
 };
 
 struct NodeListDurationSummary {

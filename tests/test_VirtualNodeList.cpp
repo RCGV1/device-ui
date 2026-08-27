@@ -30,6 +30,32 @@ class DummyActionSink : public NodeListActionSink
 
 namespace
 {
+class StandaloneListParent
+{
+  public:
+    explicit StandaloneListParent(MuiTestHarness &harness)
+    {
+        lv_obj_t *productionRoot = harness.nodeListRootForTesting();
+        parent = lv_obj_create(lv_obj_get_parent(productionRoot));
+        lv_obj_set_size(parent, lv_obj_get_width(productionRoot), lv_obj_get_height(productionRoot));
+    }
+
+    ~StandaloneListParent()
+    {
+        if (parent) {
+            lv_obj_delete(parent);
+        }
+    }
+
+    StandaloneListParent(const StandaloneListParent &) = delete;
+    StandaloneListParent &operator=(const StandaloneListParent &) = delete;
+
+    operator lv_obj_t *() const { return parent; }
+
+  private:
+    lv_obj_t *parent = nullptr;
+};
+
 lv_obj_t *boundRow(lv_obj_t *parent, NodeId id)
 {
     const uint32_t childCount = lv_obj_get_child_count(parent);
@@ -66,105 +92,11 @@ lv_obj_t *virtualSpacer(lv_obj_t *parent)
     return nullptr;
 }
 
-// Row accent colors as read back through lv_color_to_u32.
-constexpr uint32_t kMissingKeyImageBorderRed = 0xffff5555U;
-constexpr uint32_t kUnmessagableImageRecolorRed = 0xffff5555U;
 constexpr uint32_t kHighlightMeshRowBorder = 0xff67ea94U;
 
 MuiRowSnapshot snapshotVirtualRow(lv_obj_t *row)
 {
     return snapshotMuiRow(row);
-}
-
-NodeId visibleLegacyNodeAt(MuiTestHarness &harness, size_t visibleIndex)
-{
-    lv_obj_t *root = harness.nodeListRootForTesting();
-    REQUIRE(root != nullptr);
-
-    size_t seen = 0;
-    const uint32_t childCount = lv_obj_get_child_count(root);
-    for (uint32_t index = 0; index < childCount; ++index) {
-        lv_obj_t *row = lv_obj_get_child(root, static_cast<int32_t>(index));
-        if (!row || lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN) || lv_obj_get_child_count(row) < 11) {
-            continue;
-        }
-        const NodeId nodeId = static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(lv_obj_get_child(row, 2))));
-        if (!nodeId) {
-            continue;
-        }
-        if (seen == visibleIndex) {
-            return nodeId;
-        }
-        ++seen;
-    }
-
-    FAIL("visible legacy row not found");
-    return 0;
-}
-
-NodeId visibleVirtualNodeAt(lv_obj_t *root, size_t visibleIndex)
-{
-    REQUIRE(root != nullptr);
-
-    size_t seen = 0;
-    const uint32_t childCount = lv_obj_get_child_count(root);
-    for (uint32_t index = 0; index < childCount; ++index) {
-        lv_obj_t *row = lv_obj_get_child(root, static_cast<int32_t>(index));
-        if (!row || lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN)) {
-            continue;
-        }
-        const NodeId nodeId = static_cast<NodeId>(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(row)));
-        if (!nodeId) {
-            continue;
-        }
-        if (seen == visibleIndex) {
-            return nodeId;
-        }
-        ++seen;
-    }
-
-    FAIL("visible virtual row not found");
-    return 0;
-}
-
-MuiRowSnapshot syncVirtualSnapshotFromLegacy(MuiTestHarness &legacy, NodeId nodeId, NodeId expanded = 0, NodeId ownNode = 0)
-{
-    legacy.enableVirtualNodeModelFixture();
-    lv_obj_t *legacyRoot = legacy.nodeListRootForTesting();
-    REQUIRE(legacyRoot != nullptr);
-    lv_obj_t *virtualRoot = lv_obj_create(lv_obj_get_parent(legacyRoot));
-    lv_obj_remove_style_all(virtualRoot);
-    lv_obj_add_flag(virtualRoot, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_set_size(virtualRoot, lv_obj_get_content_width(legacyRoot), lv_obj_get_content_height(legacyRoot));
-    lv_obj_set_style_layout(virtualRoot, LV_LAYOUT_NONE, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_all(virtualRoot, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_update_layout(virtualRoot);
-
-    MuiRowSnapshot snapshot;
-    {
-        DummyActionSink sink;
-        VirtualNodeList list(virtualRoot, sink);
-        VisibleNodeIndex index;
-        NodeListFilter filter;
-        index.rebuild(legacy.store(), filter, ownNode, NodeListFilterPolicy::LegacyCompatible);
-
-        NodeListRenderContext context;
-        context.ownNode = ownNode;
-        const NodePosition ownPosition = legacy.nodePosition(ownNode);
-        context.hasOwnPosition = ownPosition.known;
-        context.ownLatitude = ownPosition.latitude;
-        context.ownLongitude = ownPosition.longitude;
-        context.metricUnits = true;
-
-        list.sync(legacy.store(), index, expanded, 0, context);
-        legacy.pump();
-
-        lv_obj_t *row = boundRow(virtualRoot, nodeId);
-        REQUIRE(row != nullptr);
-        snapshot = snapshotVirtualRow(row);
-    }
-    lv_obj_delete(virtualRoot);
-    return snapshot;
 }
 
 } // namespace
@@ -175,7 +107,7 @@ TEST_CASE("VirtualNodeList row pool remains strictly bounded")
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
 
     VirtualNodeList list(parent, sink);
@@ -194,7 +126,7 @@ TEST_CASE("VirtualNodeList row pool remains strictly bounded")
         snprintf(u.long_name, sizeof(u.long_name), "Node Number %u", i);
         store.upsertUser(i, 0, 1000 + i, u, false);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index, 0);
 
     const size_t objectsAt25 = harness.nodeListObjectCount();
@@ -206,7 +138,7 @@ TEST_CASE("VirtualNodeList row pool remains strictly bounded")
         snprintf(u.long_name, sizeof(u.long_name), "Node Number %u", i);
         store.upsertUser(i, 0, 1000 + i, u, false);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index, 0);
 
     const size_t objectsAt250 = harness.nodeListObjectCount();
@@ -218,7 +150,7 @@ TEST_CASE("VirtualNodeList row pool remains strictly bounded")
     for (uint32_t i = 101; i <= 250; ++i) {
         store.remove(i);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index, 0);
     harness.pump();
 
@@ -232,7 +164,7 @@ TEST_CASE("VirtualNodeList collapsed rows keep the retained-row label geometry")
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -243,7 +175,7 @@ TEST_CASE("VirtualNodeList collapsed rows keep the retained-row label geometry")
     std::strcpy(user.short_name, "NODE");
     std::strcpy(user.long_name, "Readable Candidate Node");
     store.upsertUser(0x12345678, 0, 1700000000U, user, false);
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index);
     harness.pump();
 
@@ -271,13 +203,45 @@ TEST_CASE("VirtualNodeList collapsed rows keep the retained-row label geometry")
     CHECK(lv_obj_get_style_align(signal, LV_PART_MAIN) == LV_ALIGN_TOP_RIGHT);
 }
 
+TEST_CASE("VirtualNodeList bounds long node names without marquee animations")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    StandaloneListParent parent(harness);
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    meshtastic_User user{};
+    std::strcpy(user.short_name, "NODE");
+    std::strcpy(user.long_name, "A node name that exceeds the visible row width");
+    store.upsertUser(0x12345678, 0, 1700000000U, user, false);
+    store.updatePosition(0x12345678, {true, 377749000, -1224194000, 50, 9, 13});
+    index.rebuild(store, filter, 0);
+    list.sync(store, index);
+    harness.pump();
+
+    lv_obj_t *row = boundRow(parent, 0x12345678);
+    REQUIRE(row != nullptr);
+    lv_obj_t *longName = lv_obj_get_child(row, 2);
+    REQUIRE(longName != nullptr);
+    CHECK(lv_label_get_long_mode(longName) == LV_LABEL_LONG_DOT);
+    lv_obj_t *positionDetail = lv_obj_get_child(row, 8);
+    REQUIRE(positionDetail != nullptr);
+    CHECK(lv_label_get_long_mode(positionDetail) == LV_LABEL_LONG_DOT);
+}
+
 TEST_CASE("VirtualNodeList renders last-heard ages against the supplied current time")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -288,7 +252,7 @@ TEST_CASE("VirtualNodeList renders last-heard ages against the supplied current 
     std::strcpy(user.short_name, "NODE");
     std::strcpy(user.long_name, "Recently Heard Node");
     store.upsertUser(0x12345678, 0, 1699999880U, user, false);
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
 
     list.sync(store, index, 0, 1700000000U);
     harness.pump();
@@ -303,7 +267,7 @@ TEST_CASE("VirtualNodeList refreshes last-heard labels at node-relative minute b
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -314,7 +278,7 @@ TEST_CASE("VirtualNodeList refreshes last-heard labels at node-relative minute b
     std::strcpy(user.short_name, "NODE");
     std::strcpy(user.long_name, "Boundary Node");
     store.upsertUser(0x12345678, 0, 100U, user, false);
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
 
     list.sync(store, index, 0, 159U);
     harness.pump();
@@ -336,7 +300,7 @@ TEST_CASE("VirtualNodeList renders expanded panel-backed detail labels without a
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -365,7 +329,7 @@ TEST_CASE("VirtualNodeList renders expanded panel-backed detail labels without a
     store.updateEnvironmentMetrics(0x12345678, environment);
     store.updateHops(0x12345678, 3);
 
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index, 0x12345678, 1700000000U);
     list.finishExpansionForTesting();
     harness.pump();
@@ -396,7 +360,7 @@ TEST_CASE("VirtualNodeList matches the retained-row battery clamp and imperial p
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -421,7 +385,7 @@ TEST_CASE("VirtualNodeList matches the retained-row battery clamp and imperial p
     environment.barometric_pressure = 1013.25f;
     store.updateEnvironmentMetrics(0x12345678, environment);
 
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     NodeListRenderContext context;
     context.metricUnits = false;
     list.sync(store, index, 0x12345678, 1700000000U, context);
@@ -447,7 +411,7 @@ TEST_CASE("VirtualNodeList renders retained role and unmessagable icons from the
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -471,7 +435,7 @@ TEST_CASE("VirtualNodeList renders retained role and unmessagable icons from the
     blocked.public_key.size = 32;
     store.upsertUser(0x22222222, 0, 900, blocked, false);
 
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index, 0, 1700000000U);
     harness.pump();
 
@@ -484,259 +448,60 @@ TEST_CASE("VirtualNodeList renders retained role and unmessagable icons from the
     CHECK(lv_image_get_src(lv_obj_get_child(blockedRow, 0)) == &img_unmessagable_image);
 }
 
-TEST_CASE("VirtualNodeList matches retained collapsed-row extended detail visibility and fonts")
+TEST_CASE("VirtualNodeList keeps short-name label stable across identical rebinds")
 {
-    MuiTestHarness legacy;
-    legacy.resetNodeList();
-    legacy.enableVirtualNodeModelFixture();
-    legacy.setCurrentTime(1700000000U);
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(1700000000U);
 
     constexpr NodeId ownNode = 0xaaaa0001;
     constexpr NodeId remoteNode = 0x12345678;
-    legacy.setOwnNodeFixture(ownNode);
-    legacy.addNodeFixture(ownNode, "SELF", "Own Node", 1699999900U, MeshtasticView::client, true, false, 0);
-    legacy.updatePositionFixture(ownNode, 377749000, -1224194000, 50, 9, 13);
+    harness.setOwnNodeFixture(ownNode);
+    harness.addNodeFixture(ownNode, "OWN", "Own Node", 1699999800U);
+    harness.updatePositionFixture(ownNode, 377749000, -1224194000, 0, 0, 0);
+    harness.addNodeFixture(remoteNode, "ABCD", "Remote Node", 1699999900U);
+    harness.updatePositionFixture(remoteNode, 377750000, -1224190000, 0, 0, 0);
+    harness.showNodesScreen();
 
-    legacy.addNodeFixture(remoteNode, "ABCD", "Remote Weather", 1699999880U, MeshtasticView::router, false, false, 2);
-    legacy.updatePositionFixture(remoteNode, 377750000, -1224190000, 44, 7, 12);
-    legacy.updateTelemetryFixture(remoteNode, 22.5f, 45.0f, 1013.25f, 42);
-    legacy.updateHopsFixture(remoteNode, 3);
-    legacy.pump();
-
-    // Collapsed rows: extended detail labels stay populated and visible once
-    // data arrives (the 53 px row panel clips them to a sliver), and both
-    // renderers use montserrat_14.
-    const MuiRowSnapshot legacyRow = legacy.legacyRowSnapshot(remoteNode);
-    const MuiRowSnapshot virtualRow = syncVirtualSnapshotFromLegacy(legacy, remoteNode, 0, ownNode);
-
-    CHECK(virtualRow.position1 == legacyRow.position1);
-    CHECK(virtualRow.position2 == legacyRow.position2);
-    CHECK(virtualRow.telemetry1 == legacyRow.telemetry1);
-    CHECK(virtualRow.telemetry2 == legacyRow.telemetry2);
-    CHECK(virtualRow.position1Hidden == legacyRow.position1Hidden);
-    CHECK(virtualRow.position2Hidden == legacyRow.position2Hidden);
-    CHECK(virtualRow.telemetry1Hidden == legacyRow.telemetry1Hidden);
-    CHECK(virtualRow.telemetry2Hidden == legacyRow.telemetry2Hidden);
-    CHECK(virtualRow.shortNameFont == legacyRow.shortNameFont);
-    CHECK(virtualRow.shortNameFont == reinterpret_cast<uintptr_t>(&ui_font_montserrat_14));
-}
-
-TEST_CASE("VirtualNodeList paints the missing-key border red exactly like the panel-backed list")
-{
-    MuiTestHarness legacy;
-    legacy.resetNodeList();
-    legacy.enableVirtualNodeModelFixture();
-    legacy.setCurrentTime(1700000000U);
-
-    constexpr NodeId keylessRouter = 0x12345678;
-    legacy.addNodeFixture(keylessRouter, "NOKE", "Keyless Router", 1699999900U, MeshtasticView::router, false, false, 1);
-    legacy.pump();
-
-    const MuiRowSnapshot legacyRow = legacy.legacyRowSnapshot(keylessRouter);
-    const MuiRowSnapshot virtualRow = syncVirtualSnapshotFromLegacy(legacy, keylessRouter);
-
-    REQUIRE(!legacyRow.longName.empty());
-    CHECK(virtualRow.imageBorder == kMissingKeyImageBorderRed);
-    CHECK(legacyRow.imageBorder == kMissingKeyImageBorderRed);
-}
-
-TEST_CASE("VirtualNodeList matches retained-row event-driven text and distance presentation")
-{
-    MuiTestHarness legacy;
-    legacy.resetNodeList();
-    legacy.enableVirtualNodeModelFixture();
-    legacy.setCurrentTime(1700000000U);
-
-    constexpr NodeId ownNode = 0xaaaa0001;
-    constexpr NodeId remoteNode = 0x12345678;
-    legacy.setOwnNodeFixture(ownNode);
-    legacy.addNodeFixture(ownNode, "SELF", "Own Node", 1699999900U, MeshtasticView::client, true, false, 0);
-    legacy.updatePositionFixture(ownNode, 377749000, -1224194000, 50, 9, 13);
-
-    legacy.addNodeFixture(remoteNode, "ABCD", "Remote Weather", 1699999880U, MeshtasticView::router, false, false, 2);
-    legacy.updatePositionFixture(remoteNode, 377750000, -1224190000, 44, 7, 12);
-    legacy.updateMetricsFixture(remoteNode, 85, 4.12f, 12.5f, 3.2f);
-    legacy.updateTelemetryFixture(remoteNode, 22.5f, 45.0f, 1013.25f, 42);
-    legacy.updateHopsFixture(remoteNode, 3);
-    legacy.updateSignalFixture(remoteNode, -70, 5.5f);
-    legacy.pump();
-
-    const MuiRowSnapshot legacyRow = legacy.legacyRowSnapshot(remoteNode);
-    const MuiRowSnapshot virtualRow = syncVirtualSnapshotFromLegacy(legacy, remoteNode, remoteNode, ownNode);
-
-    CHECK(virtualRow.longName == legacyRow.longName);
-    CHECK(virtualRow.shortName == legacyRow.shortName);
-    CHECK(virtualRow.shortNameY == legacyRow.shortNameY);
-    CHECK(virtualRow.battery == legacyRow.battery);
-    CHECK(virtualRow.lastHeard == legacyRow.lastHeard);
-    CHECK(virtualRow.signal == legacyRow.signal);
-    CHECK(virtualRow.position1 == legacyRow.position1);
-    CHECK(virtualRow.position2 == legacyRow.position2);
-    CHECK(virtualRow.telemetry1 == legacyRow.telemetry1);
-    CHECK(virtualRow.telemetry2 == legacyRow.telemetry2);
-}
-
-TEST_CASE("VirtualNodeList matches the same retained-row visual contract at the same viewport position")
-{
-    MuiTestHarness legacy;
-    legacy.resetNodeList();
-    legacy.enableVirtualNodeModelFixture();
-    legacy.setCurrentTime(1700000000U);
-
-    constexpr NodeId target = 0x10000001U;
-    legacy.addNodeFixture(0x10000003U, "LOW3", "Lower Three", 1699999700U, MeshtasticView::client, true, false, 0);
-    legacy.addNodeFixture(target, "TOP1", "Top Visual Node", 1699999900U, MeshtasticView::router, false, false, 0);
-    legacy.addNodeFixture(0x10000002U, "LOW2", "Lower Two", 1699999800U, MeshtasticView::client, true, false, 0);
-    legacy.updateHopsFixture(target, 2);
-    legacy.pump();
-
-    lv_obj_t *legacyRoot = legacy.nodeListRootForTesting();
-    REQUIRE(legacyRoot != nullptr);
-    lv_obj_t *virtualRoot = lv_obj_create(lv_obj_get_parent(legacyRoot));
-    lv_obj_remove_style_all(virtualRoot);
-    lv_obj_add_flag(virtualRoot, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_set_size(virtualRoot, lv_obj_get_content_width(legacyRoot), lv_obj_get_content_height(legacyRoot));
-    lv_obj_set_style_layout(virtualRoot, LV_LAYOUT_NONE, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_all(virtualRoot, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_update_layout(virtualRoot);
-
-    MuiRowSnapshot legacyRow;
-    MuiRowSnapshot virtualRow;
-    {
-        DummyActionSink sink;
-        VirtualNodeList list(virtualRoot, sink);
-        VisibleNodeIndex index;
-        NodeListFilter filter;
-        index.rebuild(legacy.store(), filter, 0, NodeListFilterPolicy::LegacyCompatible);
-        list.sync(legacy.store(), index, 0, 1700000000U);
-        legacy.pump();
-
-        CHECK(visibleLegacyNodeAt(legacy, 0) == target);
-        CHECK(visibleVirtualNodeAt(virtualRoot, 0) == target);
-
-        lv_obj_t *row = boundRow(virtualRoot, target);
+    auto snapshotFor = [&](NodeId id) {
+        lv_obj_t *row = boundRow(harness.nodeListRootForTesting(), id);
         REQUIRE(row != nullptr);
-        legacyRow = legacy.legacyRowSnapshot(target);
-        virtualRow = snapshotVirtualRow(row);
-    }
-    lv_obj_delete(virtualRoot);
-
-    CHECK(virtualRow.longName == legacyRow.longName);
-    CHECK(virtualRow.shortName == legacyRow.shortName);
-    CHECK(virtualRow.signal == legacyRow.signal);
-    CHECK(virtualRow.imageSrc == legacyRow.imageSrc);
-    CHECK(virtualRow.rowBg == legacyRow.rowBg);
-    CHECK(virtualRow.rowBorder == legacyRow.rowBorder);
-    CHECK(virtualRow.imageBg == legacyRow.imageBg);
-    CHECK(virtualRow.imageBorder == legacyRow.imageBorder);
-    CHECK(virtualRow.imageRecolor == legacyRow.imageRecolor);
-    CHECK(virtualRow.imageRecolorOpa == legacyRow.imageRecolorOpa);
-    CHECK(virtualRow.imageX == legacyRow.imageX);
-    CHECK(virtualRow.imageY == legacyRow.imageY);
-    CHECK(virtualRow.longNameX == legacyRow.longNameX);
-    CHECK(virtualRow.longNameY == legacyRow.longNameY);
-    CHECK(virtualRow.shortNameX == legacyRow.shortNameX);
-    CHECK(virtualRow.shortNameY == legacyRow.shortNameY);
-    CHECK(virtualRow.signalX == legacyRow.signalX);
-    CHECK(virtualRow.signalY == legacyRow.signalY);
-    CHECK(virtualRow.rowWidth == legacyRow.rowWidth);
-    CHECK(virtualRow.signalWidth == legacyRow.signalWidth);
-    CHECK(virtualRow.signalLongMode == legacyRow.signalLongMode);
+        return snapshotVirtualRow(row);
+    };
+    const MuiRowSnapshot first = snapshotFor(remoteNode);
+    REQUIRE(first.shortNameFont == reinterpret_cast<uintptr_t>(&ui_font_montserrat_14));
+    // Second sync with identical store/context must keep the rendered short text and offset stable.
+    harness.updatePositionFixture(remoteNode, 377750000, -1224190000, 0, 0, 0);
+    const MuiRowSnapshot second = snapshotFor(remoteNode);
+    CHECK(second.shortName == first.shortName);
+    CHECK(second.shortNameY == first.shortNameY);
+    CHECK(second.position1 == first.position1);
 }
 
-TEST_CASE("VirtualNodeList matches the retained signal label event order")
+TEST_CASE("VirtualNodeList invalidates short-name distance when own node changes")
 {
-    {
-        MuiTestHarness signalThenHops;
-        signalThenHops.resetNodeList();
-        signalThenHops.enableVirtualNodeModelFixture();
-        signalThenHops.setCurrentTime(1700000000U);
-        signalThenHops.addNodeFixture(0x11111111, "SIG1", "Signal Then Hops", 1699999900U);
-        signalThenHops.updateSignalFixture(0x11111111, -80, 4.2f);
-        signalThenHops.updateHopsFixture(0x11111111, 2);
+    MuiTestHarness harness;
+    harness.resetNodeList();
+    harness.setCurrentTime(1700000000U);
 
-        CHECK(syncVirtualSnapshotFromLegacy(signalThenHops, 0x11111111).signal ==
-              signalThenHops.legacyRowSnapshot(0x11111111).signal);
-    }
+    constexpr NodeId originalOwnNode = 0xaaaa0001;
+    constexpr NodeId newOwnNode = 0x12345678;
+    harness.setOwnNodeFixture(originalOwnNode);
+    harness.addNodeFixture(originalOwnNode, "OWN", "Original Own", 1699999800U);
+    harness.updatePositionFixture(originalOwnNode, 377749000, -1224194000, 0, 0, 0);
+    harness.addNodeFixture(newOwnNode, "ABCD", "New Own", 1699999900U);
+    harness.updatePositionFixture(newOwnNode, 377750000, -1224190000, 0, 0, 0);
+    harness.showNodesScreen();
 
-    {
-        MuiTestHarness hopsThenSignal;
-        hopsThenSignal.resetNodeList();
-        hopsThenSignal.enableVirtualNodeModelFixture();
-        hopsThenSignal.setCurrentTime(1700000000U);
-        hopsThenSignal.addNodeFixture(0x22222222, "SIG2", "Hops Then Signal", 1699999900U);
-        hopsThenSignal.updateHopsFixture(0x22222222, 4);
-        hopsThenSignal.updateSignalFixture(0x22222222, -71, 5.5f);
+    lv_obj_t *row = boundRow(harness.nodeListRootForTesting(), newOwnNode);
+    REQUIRE(row != nullptr);
+    CHECK(std::strchr(snapshotVirtualRow(row).shortName.c_str(), '\n') != nullptr);
 
-        CHECK(syncVirtualSnapshotFromLegacy(hopsThenSignal, 0x22222222).signal ==
-              hopsThenSignal.legacyRowSnapshot(0x22222222).signal);
-        CHECK(hopsThenSignal.nodeHops(0x22222222) == 0);
-    }
-}
-
-TEST_CASE("VirtualNodeList matches retained-row icon style and short-name fallback after node events")
-{
-    MuiTestHarness legacy;
-    legacy.resetNodeList();
-    legacy.enableVirtualNodeModelFixture();
-    legacy.setCurrentTime(1700000000U);
-
-    constexpr NodeId noKeyRouter = 0x11112222;
-    constexpr NodeId blocked = 0x22223333;
-    constexpr NodeId blankShort = 0x1234abcd;
-    constexpr NodeId blockedNoKey = 0x33334444;
-    constexpr NodeId darkNormal = 0x00000001;
-    constexpr NodeId brightNormal = 0x00fefefe;
-    constexpr NodeId nonPrintableShort = 0x4444beef;
-
-    legacy.addNodeFixture(noKeyRouter, "RTR1", "Router Without Key", 1699999900U, MeshtasticView::router, false, false, 0);
-    legacy.addNodeFixture(blocked, "BLKD", "Blocked Node", 1699999890U, MeshtasticView::client, true, true, 0);
-    legacy.addNodeFixture(blankShort, "", "Blank Short", 1699999880U, MeshtasticView::client, true, false, 0);
-    legacy.addNodeFixture(blockedNoKey, "BNK0", "Blocked Node Without Key", 1699999870U, MeshtasticView::client, false, true, 0);
-    legacy.addNodeFixture(darkNormal, "DRK1", "Dark Normal Node", 1699999860U, MeshtasticView::client, true, false, 0);
-    legacy.addNodeFixture(brightNormal, "BRT1", "Bright Normal Node", 1699999850U, MeshtasticView::client, true, false, 0);
-    legacy.addNodeFixture(nonPrintableShort, "\x01\x02\x03\x04", "Non Printable Short", 1699999840U, MeshtasticView::client, true,
-                          false, 0);
-    legacy.pump();
-
-    const MuiRowSnapshot legacyRouter = legacy.legacyRowSnapshot(noKeyRouter);
-    const MuiRowSnapshot virtualRouter = syncVirtualSnapshotFromLegacy(legacy, noKeyRouter);
-    CHECK(virtualRouter.imageBg == legacyRouter.imageBg);
-    CHECK(virtualRouter.imageBorder == legacyRouter.imageBorder);
-    CHECK(virtualRouter.imageRecolor == legacyRouter.imageRecolor);
-    CHECK(virtualRouter.imageRecolorOpa == legacyRouter.imageRecolorOpa);
-
-    const MuiRowSnapshot legacyBlocked = legacy.legacyRowSnapshot(blocked);
-    const MuiRowSnapshot virtualBlocked = syncVirtualSnapshotFromLegacy(legacy, blocked);
-    CHECK(virtualBlocked.imageBg == legacyBlocked.imageBg);
-    CHECK(virtualBlocked.imageBorder == legacyBlocked.imageBorder);
-    CHECK(virtualBlocked.imageRecolor == legacyBlocked.imageRecolor);
-    CHECK(virtualBlocked.imageRecolorOpa == legacyBlocked.imageRecolorOpa);
-
-    const MuiRowSnapshot legacyBlockedNoKey = legacy.legacyRowSnapshot(blockedNoKey);
-    const MuiRowSnapshot virtualBlockedNoKey = syncVirtualSnapshotFromLegacy(legacy, blockedNoKey);
-    CHECK(virtualBlockedNoKey.imageBg == legacyBlockedNoKey.imageBg);
-    CHECK(virtualBlockedNoKey.imageBorder == legacyBlockedNoKey.imageBorder);
-    CHECK(virtualBlockedNoKey.imageRecolor == legacyBlockedNoKey.imageRecolor);
-    CHECK(virtualBlockedNoKey.imageRecolorOpa == legacyBlockedNoKey.imageRecolorOpa);
-
-    const MuiRowSnapshot legacyDarkNormal = legacy.legacyRowSnapshot(darkNormal);
-    const MuiRowSnapshot virtualDarkNormal = syncVirtualSnapshotFromLegacy(legacy, darkNormal);
-    CHECK(virtualDarkNormal.imageBg == legacyDarkNormal.imageBg);
-    CHECK(virtualDarkNormal.imageBorder == legacyDarkNormal.imageBorder);
-    CHECK(virtualDarkNormal.imageRecolor == legacyDarkNormal.imageRecolor);
-    CHECK(virtualDarkNormal.imageRecolorOpa == legacyDarkNormal.imageRecolorOpa);
-
-    const MuiRowSnapshot legacyBrightNormal = legacy.legacyRowSnapshot(brightNormal);
-    const MuiRowSnapshot virtualBrightNormal = syncVirtualSnapshotFromLegacy(legacy, brightNormal);
-    CHECK(virtualBrightNormal.imageBg == legacyBrightNormal.imageBg);
-    CHECK(virtualBrightNormal.imageBorder == legacyBrightNormal.imageBorder);
-    CHECK(virtualBrightNormal.imageRecolor == legacyBrightNormal.imageRecolor);
-    CHECK(virtualBrightNormal.imageRecolorOpa == legacyBrightNormal.imageRecolorOpa);
-
-    CHECK(syncVirtualSnapshotFromLegacy(legacy, blankShort).shortName == legacy.legacyRowSnapshot(blankShort).shortName);
-    CHECK(syncVirtualSnapshotFromLegacy(legacy, nonPrintableShort).shortName ==
-          legacy.legacyRowSnapshot(nonPrintableShort).shortName);
+    harness.setOwnNodeFixture(newOwnNode);
+    harness.updateLastHeardFixture(newOwnNode);
+    row = boundRow(harness.nodeListRootForTesting(), newOwnNode);
+    REQUIRE(row != nullptr);
+    CHECK(std::strchr(snapshotVirtualRow(row).shortName.c_str(), '\n') == nullptr);
 }
 
 TEST_CASE("VirtualNodeList short-name distance formatting clears stale pooled bytes")
@@ -749,6 +514,21 @@ TEST_CASE("VirtualNodeList short-name distance formatting clears stale pooled by
                                                          -1224194000, 377749500, -1224194000, true);
 
     CHECK(std::string(shortText).substr(0, 5) == "AB  \n");
+}
+
+TEST_CASE("VirtualNodeList position formatting accepts extreme protocol coordinates")
+{
+    char shortText[32];
+    char positionText[48];
+    char altitudeText[24];
+
+    NodeListRowPresentation::formatShortNameWithDistance(shortText, sizeof(shortText), "AB", 0x12345678, true, 1700000000,
+                                                         -1700000000, -1700000000, 1700000000, true);
+    NodeListRowPresentation::formatPositionLines(0, 0, INT32_MIN, true, positionText, sizeof(positionText), altitudeText,
+                                                 sizeof(altitudeText));
+
+    CHECK(std::strchr(shortText, '\n') != nullptr);
+    CHECK(std::string(altitudeText) == "0m MSL");
 }
 
 TEST_CASE("VirtualNodeList short-name formatting clears stale pooled bytes without a distance line")
@@ -765,87 +545,13 @@ TEST_CASE("VirtualNodeList short-name formatting clears stale pooled bytes witho
     CHECK(shortText[3] == '\0');
 }
 
-TEST_CASE("VirtualNodeList resets pooled image recolor when a row is rebound after unmessagable")
-{
-    MuiTestHarness legacy;
-    legacy.resetNodeList();
-    legacy.enableVirtualNodeModelFixture();
-
-    lv_obj_t *virtualRoot = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(virtualRoot, 320, 240);
-    lv_obj_set_style_layout(virtualRoot, LV_LAYOUT_NONE, LV_PART_MAIN | LV_STATE_DEFAULT);
-
-    DummyActionSink sink;
-    MuiRowSnapshot reusedDarkNormal;
-    MuiRowSnapshot freshDarkNormal;
-    MuiRowSnapshot reusedBrightRouter;
-    MuiRowSnapshot freshBrightRouter;
-    {
-        VirtualNodeList list(virtualRoot, sink);
-        VisibleNodeIndex index;
-        NodeListFilter filter;
-        lv_obj_t *pooledRow = nullptr;
-
-        const auto syncCurrentLegacy = [&](NodeId id) {
-            index.rebuild(legacy.store(), filter, 0, NodeListFilterPolicy::LegacyCompatible);
-            list.sync(legacy.store(), index);
-            legacy.pump();
-            lv_obj_t *row = boundRow(virtualRoot, id);
-            REQUIRE(row != nullptr);
-            return row;
-        };
-
-        constexpr NodeId blockedFirst = 0x5555a001;
-        legacy.addNodeFixture(blockedFirst, "BLK1", "Blocked Prime", 1699999900U, MeshtasticView::client, true, true, 0);
-        pooledRow = syncCurrentLegacy(blockedFirst);
-        CHECK(snapshotVirtualRow(pooledRow).imageRecolor == kUnmessagableImageRecolorRed);
-
-        constexpr NodeId darkNormal = 0x00000001;
-        legacy.resetNodeList();
-        legacy.enableVirtualNodeModelFixture();
-        legacy.addNodeFixture(darkNormal, "DRK1", "Fresh Dark Normal", 1699999900U, MeshtasticView::client, true, false, 0);
-        freshDarkNormal = legacy.legacyRowSnapshot(darkNormal);
-        lv_obj_t *darkRow = syncCurrentLegacy(darkNormal);
-        CHECK(darkRow == pooledRow);
-        reusedDarkNormal = snapshotVirtualRow(darkRow);
-
-        constexpr NodeId blockedSecond = 0x5555a002;
-        legacy.resetNodeList();
-        legacy.enableVirtualNodeModelFixture();
-        legacy.addNodeFixture(blockedSecond, "BLK2", "Blocked Prime Again", 1699999900U, MeshtasticView::client, true, true, 0);
-        lv_obj_t *blockedRow = syncCurrentLegacy(blockedSecond);
-        CHECK(blockedRow == pooledRow);
-        CHECK(snapshotVirtualRow(blockedRow).imageRecolor == kUnmessagableImageRecolorRed);
-
-        constexpr NodeId brightRouter = 0x00fefefe;
-        legacy.resetNodeList();
-        legacy.enableVirtualNodeModelFixture();
-        legacy.addNodeFixture(brightRouter, "BRT1", "Fresh Bright Router", 1699999900U, MeshtasticView::router, true, false, 0);
-        freshBrightRouter = legacy.legacyRowSnapshot(brightRouter);
-        lv_obj_t *brightRow = syncCurrentLegacy(brightRouter);
-        CHECK(brightRow == pooledRow);
-        reusedBrightRouter = snapshotVirtualRow(brightRow);
-    }
-    lv_obj_delete(virtualRoot);
-
-    CHECK(reusedDarkNormal.imageBg == freshDarkNormal.imageBg);
-    CHECK(reusedDarkNormal.imageBorder == freshDarkNormal.imageBorder);
-    CHECK(reusedDarkNormal.imageRecolor == freshDarkNormal.imageRecolor);
-    CHECK(reusedDarkNormal.imageRecolorOpa == freshDarkNormal.imageRecolorOpa);
-
-    CHECK(reusedBrightRouter.imageBg == freshBrightRouter.imageBg);
-    CHECK(reusedBrightRouter.imageBorder == freshBrightRouter.imageBorder);
-    CHECK(reusedBrightRouter.imageRecolor == freshBrightRouter.imageRecolor);
-    CHECK(reusedBrightRouter.imageRecolorOpa == freshBrightRouter.imageRecolorOpa);
-}
-
 TEST_CASE("VirtualNodeList expansion and stable selection")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     VirtualNodeList list(parent, sink);
 
     NodeStore store;
@@ -857,7 +563,7 @@ TEST_CASE("VirtualNodeList expansion and stable selection")
         snprintf(u.short_name, sizeof(u.short_name), "N%03u", i);
         store.upsertUser(i, 0, 1000 + i, u, false);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index, 0);
 
     // Expand node 5
@@ -878,7 +584,7 @@ TEST_CASE("VirtualNodeList expanded row geometry is exact at list boundaries")
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -890,7 +596,7 @@ TEST_CASE("VirtualNodeList expanded row geometry is exact at list boundaries")
         std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
         store.upsertUser(i, 0, 1000 + (6 - i), user, false);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
 
     CHECK(VirtualNodeList::COLLAPSED_ROW_HEIGHT == 53);
     CHECK(VirtualNodeList::EXPANDED_ROW_HEIGHT == 83);
@@ -952,7 +658,7 @@ TEST_CASE("VirtualNodeList expansion animation geometry stays linear")
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -964,7 +670,7 @@ TEST_CASE("VirtualNodeList expansion animation geometry stays linear")
         std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
         store.upsertUser(i, 0, 1000 + (6 - i), user, false);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
 
     constexpr int32_t stride = 53 + 5;
     constexpr int32_t delta = 83 - 53;
@@ -1000,7 +706,7 @@ TEST_CASE("VirtualNodeList applies expanded sync requests after the active anima
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -1012,7 +718,7 @@ TEST_CASE("VirtualNodeList applies expanded sync requests after the active anima
         std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
         store.upsertUser(i, 0, 1000 + (6 - i), user, false);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
 
     SUBCASE("collapse request is replayed")
     {
@@ -1044,7 +750,7 @@ TEST_CASE("VirtualNodeList applies expanded sync requests after the active anima
         for (uint32_t i = 1; i <= 5; ++i) {
             store.updateLastHeard(i, 2000 + i);
         }
-        index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+        index.rebuild(store, filter, 0);
         list.sync(store, index, 4, 1700000000U);
         harness.pump();
 
@@ -1072,7 +778,7 @@ TEST_CASE("VirtualNodeList applies expanded sync requests after the active anima
         list.setExpansionProgressForTesting(50);
 
         store.remove(2);
-        index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+        index.rebuild(store, filter, 0);
         list.sync(store, index, 4, 1700000000U);
         harness.pump();
 
@@ -1116,7 +822,7 @@ TEST_CASE("VirtualNodeList scrolling expanded rows does not repeat expanded inde
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -1128,7 +834,7 @@ TEST_CASE("VirtualNodeList scrolling expanded rows does not repeat expanded inde
         std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
         store.upsertUser(i, 0, 1000 + (81 - i), user, false);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index, 40, 1700000000U);
     list.setExpansionProgressForTesting(50);
 
@@ -1150,7 +856,7 @@ TEST_CASE("VirtualNodeList sync skips redundant visible-row rebinding")
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -1162,7 +868,7 @@ TEST_CASE("VirtualNodeList sync skips redundant visible-row rebinding")
         std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
         store.upsertUser(i, 0, 1000 + i, user, false);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
 
     list.sync(store, index, 0, 1700000000U);
     const uint32_t bindsAfterInitialSync = list.bindGenerationForTesting();
@@ -1178,7 +884,7 @@ TEST_CASE("VirtualNodeList keeps the visible anchor stable when a node arrives a
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -1190,7 +896,7 @@ TEST_CASE("VirtualNodeList keeps the visible anchor stable when a node arrives a
         std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
         store.upsertUser(i, 0, 1000 + i, user, false);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index, 0, 1700000000U);
 
     constexpr NodeId anchorId = 20;
@@ -1203,7 +909,7 @@ TEST_CASE("VirtualNodeList keeps the visible anchor stable when a node arrives a
     meshtastic_User incoming{};
     std::strcpy(incoming.short_name, "NEW");
     store.upsertUser(99, 0, 5000, incoming, false);
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index, 0, 1700000000U);
     harness.pump();
 
@@ -1217,7 +923,7 @@ TEST_CASE("VirtualNodeList does not rebind unchanged visible rows for offscreen 
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -1229,7 +935,7 @@ TEST_CASE("VirtualNodeList does not rebind unchanged visible rows for offscreen 
         std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
         store.upsertUser(i, 0, 1000 + i, user, false);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index, 0, 1700000000U);
     list.scrollTo(20, LV_ANIM_OFF);
     harness.pump();
@@ -1238,7 +944,7 @@ TEST_CASE("VirtualNodeList does not rebind unchanged visible rows for offscreen 
     meshtastic_User incoming{};
     std::strcpy(incoming.short_name, "NEW");
     store.upsertUser(99, 0, 5000, incoming, false);
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index, 0, 1700000000U);
     harness.pump();
 
@@ -1251,7 +957,7 @@ TEST_CASE("VirtualNodeList rebinds only the newly visible row when the render wi
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -1263,7 +969,7 @@ TEST_CASE("VirtualNodeList rebinds only the newly visible row when the render wi
         std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
         store.upsertUser(i, 0, 1000 + i, user, false);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
 
     list.sync(store, index, 0, 1700000000U);
     harness.pump();
@@ -1274,20 +980,73 @@ TEST_CASE("VirtualNodeList rebinds only the newly visible row when the render wi
 
     lv_obj_scroll_to_y(parent, list.rowYForTesting(2), LV_ANIM_OFF);
     harness.pump();
-    list.refreshVisibleRows();
 
     CHECK(list.bindGenerationForTesting() == bindsAfterInitialSync + 1);
-    CHECK(list.panelOrderMoveCountForTesting() == panelMovesAfterInitialSync + 1);
-    CHECK(list.groupOrderMoveCountForTesting() == groupMovesAfterInitialSync + 1);
+    CHECK(list.panelOrderMoveCountForTesting() == panelMovesAfterInitialSync + VirtualNodeList::POOL_SIZE + 1);
+    CHECK(list.groupOrderMoveCountForTesting() == groupMovesAfterInitialSync + VirtualNodeList::POOL_SIZE);
 }
 
-TEST_CASE("VirtualNodeList click retains the pressed node across pool reuse")
+TEST_CASE("VirtualNodeList fills a tall node-list viewport with overscan")
 {
     MuiTestHarness harness;
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
+    REQUIRE(parent != nullptr);
+    lv_obj_set_size(parent, 400, 422);
+    lv_obj_set_style_pad_all(parent, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_update_layout(parent);
+    VirtualNodeList list(parent, sink);
+
+    CHECK(list.boundRowCount() == VirtualNodeList::POOL_SIZE + 2);
+}
+
+TEST_CASE("VirtualNodeList leaves a tall list when its group has stale foreign focus")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    StandaloneListParent parent(harness);
+    REQUIRE(parent != nullptr);
+    lv_obj_set_size(parent, 400, 422);
+    lv_obj_set_style_pad_all(parent, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_update_layout(parent);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    for (NodeId id = 1; id <= 9; ++id) {
+        meshtastic_User user{};
+        std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", id);
+        store.upsertUser(id, 0, 1000 + id, user, false);
+    }
+    index.rebuild(store, filter, 0);
+    list.sync(store, index, 0, 1700000000U);
+    harness.pump();
+    REQUIRE(list.boundRowCount() == VirtualNodeList::MAX_POOL_SIZE);
+
+    list.focus(1);
+    lv_obj_t *staleFocus = lv_button_create(parent);
+    lv_group_add_obj(list.navigationGroup(), staleFocus);
+    lv_group_focus_obj(staleFocus);
+
+    sink.boundaryCalled = false;
+    lv_group_focus_next(list.navigationGroup());
+
+    CHECK(sink.boundaryCalled);
+    CHECK(sink.boundaryForward);
+}
+
+TEST_CASE("VirtualNodeList defers row ordering until fast multi-row scrolling ends")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -1299,7 +1058,68 @@ TEST_CASE("VirtualNodeList click retains the pressed node across pool reuse")
         std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
         store.upsertUser(i, 0, 1000 + i, user, false);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
+    list.sync(store, index, 0, 1700000000U);
+    harness.pump();
+
+    const uint32_t bindsBeforeForward = list.bindGenerationForTesting();
+    const uint32_t panelMovesBeforeForward = list.panelOrderMoveCountForTesting();
+    const uint32_t groupMovesBeforeForward = list.groupOrderMoveCountForTesting();
+    lv_obj_scroll_to_y(parent, list.rowYForTesting(4), LV_ANIM_OFF);
+    harness.pump();
+
+    CHECK(list.bindGenerationForTesting() == bindsBeforeForward + 3);
+    CHECK(list.panelOrderMoveCountForTesting() == panelMovesBeforeForward + VirtualNodeList::POOL_SIZE + 1);
+    CHECK(list.groupOrderMoveCountForTesting() == groupMovesBeforeForward + VirtualNodeList::POOL_SIZE);
+    CHECK(boundRow(parent, 27) != nullptr);
+
+    const uint32_t bindsBeforeBackward = list.bindGenerationForTesting();
+    const uint32_t panelMovesBeforeBackward = list.panelOrderMoveCountForTesting();
+    const uint32_t groupMovesBeforeBackward = list.groupOrderMoveCountForTesting();
+    lv_obj_scroll_to_y(parent, list.rowYForTesting(1), LV_ANIM_OFF);
+    harness.pump();
+
+    CHECK(list.bindGenerationForTesting() == bindsBeforeBackward + 3);
+    CHECK(list.panelOrderMoveCountForTesting() == panelMovesBeforeBackward + VirtualNodeList::POOL_SIZE + 1);
+    CHECK(list.groupOrderMoveCountForTesting() == groupMovesBeforeBackward + VirtualNodeList::POOL_SIZE);
+    CHECK(boundRow(parent, 30) != nullptr);
+}
+
+TEST_CASE("VirtualNodeList removes both scroll callbacks when destroyed")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    StandaloneListParent parent(harness);
+    REQUIRE(parent != nullptr);
+    const uint32_t eventsBefore = lv_obj_get_event_count(parent);
+    {
+        VirtualNodeList list(parent, sink);
+        CHECK(lv_obj_get_event_count(parent) == eventsBefore + 2);
+    }
+    CHECK(lv_obj_get_event_count(parent) == eventsBefore);
+}
+
+TEST_CASE("VirtualNodeList click retains the pressed node across pool reuse")
+{
+    MuiTestHarness harness;
+    harness.resetNodeList();
+
+    DummyActionSink sink;
+    StandaloneListParent parent(harness);
+    REQUIRE(parent != nullptr);
+    VirtualNodeList list(parent, sink);
+
+    NodeStore store;
+    VisibleNodeIndex index;
+    NodeListFilter filter;
+    for (uint32_t i = 1; i <= 30; ++i) {
+        meshtastic_User user{};
+        std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
+        store.upsertUser(i, 0, 1000 + i, user, false);
+    }
+    index.rebuild(store, filter, 0);
     list.sync(store, index);
 
     lv_obj_t *pressedRow = boundRow(parent, 30);
@@ -1322,7 +1142,7 @@ TEST_CASE("VirtualNodeList clears retained press identity when LVGL cancels the 
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -1334,7 +1154,7 @@ TEST_CASE("VirtualNodeList clears retained press identity when LVGL cancels the 
         std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
         store.upsertUser(i, 0, 1000 + i, user, false);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index);
 
     lv_obj_t *pressedRow = boundRow(parent, 30);
@@ -1371,7 +1191,7 @@ TEST_CASE("VirtualNodeList group edge navigation uses the currently focused recy
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -1383,7 +1203,7 @@ TEST_CASE("VirtualNodeList group edge navigation uses the currently focused recy
         std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
         store.upsertUser(i, 0, 1000 + i, user, false);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index);
 
     list.focus(24);
@@ -1414,14 +1234,15 @@ TEST_CASE("VirtualNodeList hands both logical ends back to its action sink")
     harness.resetNodeList();
 
     DummyActionSink sink;
-    VirtualNodeList list(harness.nodeListRootForTesting(), sink);
+    StandaloneListParent parent(harness);
+    VirtualNodeList list(parent, sink);
     NodeStore store;
     VisibleNodeIndex index;
     NodeListFilter filter;
     meshtastic_User user{};
     std::strcpy(user.short_name, "ONE");
     store.upsertUser(1, 0, 1000, user, false);
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index);
 
     list.focus(1);
@@ -1444,7 +1265,7 @@ TEST_CASE("VirtualNodeList clears IAQ label styles when a pooled row becomes non
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     VirtualNodeList list(parent, sink);
     NodeStore store;
     VisibleNodeIndex index;
@@ -1455,7 +1276,7 @@ TEST_CASE("VirtualNodeList clears IAQ label styles when a pooled row becomes non
     meshtastic_EnvironmentMetrics air{};
     air.iaq = 42;
     store.updateEnvironmentMetrics(1, air);
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
 
     NodeListRenderContext context;
     context.highlightIaq = true;
@@ -1486,7 +1307,7 @@ TEST_CASE("VirtualNodeList rebinds visible highlights when only render context c
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     VirtualNodeList list(parent, sink);
     NodeStore store;
     VisibleNodeIndex index;
@@ -1495,7 +1316,7 @@ TEST_CASE("VirtualNodeList rebinds visible highlights when only render context c
     std::strcpy(user.short_name, "MATCH");
     std::strcpy(user.long_name, "Context Match");
     store.upsertUser(1, 0, 1000, user, false);
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
 
     list.sync(store, index, 0, 1700000000U);
     lv_obj_t *row = boundRow(parent, 1);
@@ -1516,7 +1337,7 @@ TEST_CASE("VirtualNodeList unit-test finish removes the live LVGL expansion anim
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     REQUIRE(parent != nullptr);
     VirtualNodeList list(parent, sink);
 
@@ -1528,11 +1349,9 @@ TEST_CASE("VirtualNodeList unit-test finish removes the live LVGL expansion anim
         std::snprintf(user.short_name, sizeof(user.short_name), "N%03u", i);
         store.upsertUser(i, 0, 1000 + i, user, false);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
 
-    const uint16_t animationsBefore = lv_anim_count_running();
     list.sync(store, index, 2, 1700000000U);
-    (void)animationsBefore;
     REQUIRE(list.expansionAnimationRegisteredForTesting());
 
     list.finishExpansionForTesting();
@@ -1548,7 +1367,7 @@ TEST_CASE("VirtualNodeList handles rapid deletion while scrolled down and oversc
     harness.resetNodeList();
 
     DummyActionSink sink;
-    lv_obj_t *parent = harness.nodeListRootForTesting();
+    StandaloneListParent parent(harness);
     VirtualNodeList list(parent, sink);
 
     NodeStore store;
@@ -1560,7 +1379,7 @@ TEST_CASE("VirtualNodeList handles rapid deletion while scrolled down and oversc
         snprintf(u.short_name, sizeof(u.short_name), "N%03u", i);
         store.upsertUser(i, 0, 1000 + i, u, false);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index, 0);
 
     // Scroll to the very bottom
@@ -1571,7 +1390,7 @@ TEST_CASE("VirtualNodeList handles rapid deletion while scrolled down and oversc
     for (uint32_t i = 3; i <= 50; ++i) {
         store.remove(i);
     }
-    index.rebuild(store, filter, 0, NodeListFilterPolicy::LegacyCompatible);
+    index.rebuild(store, filter, 0);
     list.sync(store, index, 0);
     harness.pump();
 

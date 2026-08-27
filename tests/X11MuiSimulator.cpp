@@ -33,7 +33,7 @@ bool fullyVisibleCenter(lv_obj_t *object, int16_t &x, int16_t &y)
 
     lv_area_t coords{};
     lv_obj_get_coords(object, &coords);
-    if (coords.x1 < 0 || coords.y1 < 0 || coords.x2 >= 320 || coords.y2 >= 240) {
+    if (coords.x1 < 0 || coords.y1 < 0 || coords.x2 >= MUI_TEST_DISPLAY_WIDTH || coords.y2 >= MUI_TEST_DISPLAY_HEIGHT) {
         return false;
     }
     x = static_cast<int16_t>((coords.x1 + coords.x2) / 2);
@@ -96,27 +96,20 @@ bool findNodeListButton(lv_obj_t *object, uint32_t selectedNode, uintptr_t focus
 } // namespace
 
 X11MuiSimulator::X11MuiSimulator()
-    : config(DisplayDriverConfig::device_t::X11, 320, 240), driver(nullptr), pointerInput(nullptr), keyboardInput(nullptr),
-      encoderInput(nullptr), fixturePointerInput(nullptr), originalPointerRead(nullptr), originalKeyboardRead(nullptr),
-      originalEncoderRead(nullptr)
+    : config(DisplayDriverConfig::device_t::X11, MUI_TEST_DISPLAY_WIDTH, MUI_TEST_DISPLAY_HEIGHT), driver(nullptr),
+      pointerInput(nullptr), keyboardInput(nullptr), encoderInput(nullptr), fixturePointerInput(nullptr),
+      originalPointerRead(nullptr), originalKeyboardRead(nullptr), originalEncoderRead(nullptr)
 {
 }
 
-bool X11MuiSimulator::initialize(Implementation implementation)
+bool X11MuiSimulator::initialize()
 {
     if (ready()) {
         return true;
     }
 
-    driver = &X11Driver::create(320, 240);
+    driver = &X11Driver::create(MUI_TEST_DISPLAY_WIDTH, MUI_TEST_DISPLAY_HEIGHT);
     harness = std::make_unique<MuiTestHarness>(config, driver);
-    if (implementation == Implementation::VirtualCandidate) {
-        harness->enableVirtualNodeListFixture();
-#ifdef DEVICE_UI_MUI_VIRTUAL_NODE_LIST
-    } else {
-        harness->enableVirtualNodeModelFixture();
-#endif
-    }
     scanInputs();
     pump(50);
     return ready();
@@ -127,9 +120,9 @@ bool X11MuiSimulator::ready() const
     return harness && harness->ready() && driver && driver->getDisplay() && lv_screen_active();
 }
 
-void X11MuiSimulator::populateLegacyNodeFixtures(size_t count, uint32_t seed)
+void X11MuiSimulator::populateNodeFixtures(size_t count, uint32_t seed)
 {
-    harness->populateLegacyNodeFixtures(count, seed);
+    harness->populateNodeFixtures(count, seed);
 }
 
 void X11MuiSimulator::pumpUntilClosed()
@@ -274,11 +267,6 @@ void X11MuiSimulator::stopNodeListScrollForTesting()
     if (root) {
         lv_obj_stop_scroll_anim(root);
     }
-}
-
-bool X11MuiSimulator::virtualNodeListEnabledForTesting() const
-{
-    return harness && harness->virtualNodeListEnabled();
 }
 
 uint32_t X11MuiSimulator::selectedNodeForTesting() const

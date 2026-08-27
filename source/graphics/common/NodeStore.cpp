@@ -1,10 +1,9 @@
 #include "graphics/common/NodeStore.h"
+#include "graphics/common/MeshtasticView.h"
 
-#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <vector>
 
 namespace
 {
@@ -75,16 +74,24 @@ NodeMutation NodeStore::upsertUser(NodeId id, uint8_t channel, uint32_t lastHear
     if (inserted) {
         record.id = id;
         record.recencyOrder = nextRecencyOrder++;
-        changed = NodeFieldUser | NodeFieldChannel | NodeFieldFlags | NodeFieldLastHeard;
+        changed = NodeFieldUser | NodeFieldFlags | NodeFieldLastHeard;
+        if (channel < c_max_channels) {
+            changed |= NodeFieldChannel;
+        }
     }
     if (!record.hasUser || !sameUser(record.user, user)) {
         record.hasUser = true;
         record.user = user;
         changed |= NodeFieldUser;
     }
-    if (record.channel != channel) {
-        record.channel = channel;
-        changed |= NodeFieldChannel;
+    if (channel < c_max_channels) {
+        if (record.channel != channel) {
+            record.channel = channel;
+            changed |= NodeFieldChannel;
+        }
+    } else if (inserted) {
+        // New record with invalid channel keeps default 0 without dirtying.
+        record.channel = 0;
     }
     const bool hasKey = user.public_key.size != 0;
     const bool unmessagable = user.has_is_unmessagable && user.is_unmessagable;
@@ -121,16 +128,21 @@ NodeMutation NodeStore::upsertUnknown(NodeId id, uint8_t channel, uint32_t lastH
     if (inserted) {
         record.id = id;
         record.recencyOrder = nextRecencyOrder++;
-        changed = NodeFieldUser | NodeFieldChannel | NodeFieldFlags | NodeFieldLastHeard;
+        changed = NodeFieldUser | NodeFieldFlags | NodeFieldLastHeard;
+        if (channel < c_max_channels) {
+            changed |= NodeFieldChannel;
+        }
     }
     if (record.hasUser || !sameUser(record.user, fallback)) {
         record.hasUser = false;
         record.user = fallback;
         changed |= NodeFieldUser;
     }
-    if (inserted && record.channel != channel) {
+    if (inserted && channel < c_max_channels && record.channel != channel) {
         record.channel = channel;
         changed |= NodeFieldChannel;
+    } else if (inserted && channel >= c_max_channels) {
+        record.channel = 0;
     }
     if (record.hasKey != hasKey || record.unmessagable || record.viaMqtt != viaMqtt) {
         record.hasKey = hasKey;
@@ -282,11 +294,7 @@ NodeId NodeStore::selectPurgeCandidate(NodeId incoming, NodeId ownNode, uint32_t
     if (nodes.size() <= 1)
         return 0;
 
-    std::vector<const NodeRecord *> ordered;
-    ordered.reserve(nodes.size());
-    for (const auto &[id, record] : nodes)
-        ordered.push_back(&record);
-    std::sort(ordered.begin(), ordered.end(), [now](const NodeRecord *left, const NodeRecord *right) {
+    const auto older = [now](const NodeRecord *left, const NodeRecord *right) {
         const uint32_t leftHeard = effectiveLastHeard(*left, now);
         const uint32_t rightHeard = effectiveLastHeard(*right, now);
         if (leftHeard != rightHeard)
@@ -296,7 +304,7 @@ NodeId NodeStore::selectPurgeCandidate(NodeId incoming, NodeId ownNode, uint32_t
         if (left->recencyOrder != right->recencyOrder)
             return left->recencyPromoted ? left->recencyOrder < right->recencyOrder : left->recencyOrder > right->recencyOrder;
         return left->id < right->id;
-    });
+    };
 
     const auto removable = [incoming, ownNode](const NodeRecord &record) {
         return record.id != incoming && record.id != ownNode && !record.hasActiveChat;
@@ -305,14 +313,31 @@ NodeId NodeStore::selectPurgeCandidate(NodeId incoming, NodeId ownNode, uint32_t
         return !record.hasUser && now >= record.lastHeard && now - record.lastHeard >= purgeFreshnessSeconds;
     };
 
-    const size_t preferredPopulation = (ordered.size() * 4 + 4) / 5;
-    for (size_t i = 0; i < preferredPopulation; ++i) {
-        if (removable(*ordered[i]) && staleUnknown(*ordered[i]))
-            return ordered[i]->id;
+    const NodeRecord *oldestRemovable = nullptr;
+    const NodeRecord *oldestStaleUnknown = nullptr;
+    for (const auto &[id, record] : nodes) {
+        if (removable(record)) {
+            if (!oldestRemovable || older(&record, oldestRemovable)) {
+                oldestRemovable = &record;
+            }
+            if (staleUnknown(record) && (!oldestStaleUnknown || older(&record, oldestStaleUnknown))) {
+                oldestStaleUnknown = &record;
+            }
+        }
     }
-    for (const auto *record : ordered) {
-        if (removable(*record))
-            return record->id;
+
+    if (oldestStaleUnknown) {
+        const size_t preferredPopulation = (nodes.size() * 4 + 4) / 5;
+        size_t staleUnknownRank = 1;
+        for (const auto &[id, record] : nodes) {
+            if (older(&record, oldestStaleUnknown)) {
+                ++staleUnknownRank;
+            }
+        }
+        if (staleUnknownRank <= preferredPopulation) {
+            return oldestStaleUnknown->id;
+        }
     }
-    return 0;
+
+    return oldestRemovable ? oldestRemovable->id : 0;
 }
